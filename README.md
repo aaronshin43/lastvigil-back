@@ -1,0 +1,1 @@
+pip install "fastapi[all]" python-socketio opencv-python-headless mediapipe numpy
