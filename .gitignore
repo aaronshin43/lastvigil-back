@@ -81,3 +81,10 @@ yarn-error.log
 
 # Docker
 docker-compose.override.yml
+
+# 프로젝트별 데이터 및 모델 제외
+data/*.csv
+data/*.json
+models/*.pkl
+models/*.h5
+images/
