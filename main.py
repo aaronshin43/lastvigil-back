@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
-
+# test
 # CORS 설정 (모든 출처 허용 - 테스트용)
 app.add_middleware(
     CORSMiddleware,
