@@ -61,7 +61,7 @@ session_tasks: Dict[str, asyncio.Task] = {}  # {session_id: game_loop_task}
 # 적군 정보 (HP, 속도, 점수)
 ENEMY_CONFIG = {
     # Tier 1: 기본 몬스터 (10점)
-    "slime": {"hp": 50, "speed": 40, "score": 10},
+    "slime": {"hp": 50, "speed": 200, "score": 10},
     "skeleton": {"hp": 80, "speed": 50, "score": 10},
     "orc": {"hp": 100, "speed": 45, "score": 10},
     # Tier 2: 중급 몬스터 (15점)
@@ -315,10 +315,11 @@ async def game_loop(websocket: WebSocket, session_id: str):
             for enemy in gameState["enemies"]:
                 enemy.update(delta_time)
                 
-                # 적이 화면 왼쪽 끝에 도달하면 플레이어 HP 감소
-                if enemy.x <= 0 and not enemy.isDead:
-                    gameState["playerHP"] -= 100
+                # 적이 플레이어 위치에 도달하면 플레이어 HP 감소
+                if enemy.x <= 530 and not enemy.isDead:
+                    gameState["playerHP"] -= 10
                     enemy.isDead = True  # 도달한 적은 제거
+                    enemy.scoreGiven = True  # 점수 지급 방지 (도달한 적은 점수 없음)
                     print(f"[Game] 적 통과! HP: {gameState['playerHP']} (세션: {session_id[:8]}...)")
             
             # 3. 죽은 적 제거 및 점수 획듩 (한 번만)
