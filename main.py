@@ -370,7 +370,7 @@ async def game_loop(websocket: WebSocket, session_id: str):
                     for enemy in hit_enemies:
                         enemy.take_damage(skill["damage"])
                     
-                    print(f"[Game] 제스처 매칭! {gesture} | 스킬: {skill['type']} (데미지: {skill['damage']}) | 새 시퀀스: {gameState['gestureSequence']} (세션: {session_id[:8]}...)")
+                    # print(f"[Game] 제스처 매칭! {gesture} | 스킬: {skill['type']} (데미지: {skill['damage']}) | 새 시퀀스: {gameState['gestureSequence']} (세션: {session_id[:8]}...)")
             # 매칭 성공 여부 저장
             latestAIInput["gestureMatched"] = gesture_matched
             
@@ -545,7 +545,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # 첫 번째 알파벳 제거하고 새로운 알파벳 추가
                         gameState["gestureSequence"].pop(0)
                         gameState["gestureSequence"].append(np.random.choice(AVAILABLE_GESTURES))
-                        print(f"[Game] 알파벳 스킵! (세션: {session_id[:8]}...)")
+                        # print(f"[Game] 알파벳 스킵! (세션: {session_id[:8]}...)")
                     continue
             except json.JSONDecodeError:
                 pass  # Base64 이미지인 경우 계속 진행
