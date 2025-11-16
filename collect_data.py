@@ -1,6 +1,6 @@
 """
-ASL 제스처 데이터 수집 스크립트
-웹캠으로 손 제스처를 실시간 캡처하여 data/gestures.csv에 저장
+ASL gesture data collection script
+Captures hand gestures in real-time from webcam and saves to data/gestures.csv
 """
 
 import cv2
@@ -12,36 +12,36 @@ from datetime import datetime
 from core.feature_extractor import extract_features_from_mediapipe
 
 
-# MediaPipe Hands 초기화
+# Initialize MediaPipe Hands
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
-# 수집할 제스처 목록 (필요에 따라 수정 가능)
+# List of gestures to collect (can be modified as needed)
 GESTURE_LIST = ["A", "B", "C", "L", "R", "U", "Y", "Idle"]
 
-# 데이터 저장 경로
+# Data save path
 DATA_DIR = "data"
 CSV_FILE = os.path.join(DATA_DIR, "gestures.csv")
 
 
 def setup_data_directory():
-    """데이터 디렉토리 생성"""
+    """Create data directory"""
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
-        print(f"✓ '{DATA_DIR}' 디렉토리 생성 완료")
+        print(f"✓ Created '{DATA_DIR}' directory")
 
 
 def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) -> list:
     """
-    특정 제스처의 데이터를 수집
+    Collect data for a specific gesture
     
     Args:
-        gesture_name: 수집할 제스처 이름 (예: 'A', 'B', 'Idle')
-        duration: 수집 시간 (초)
-        fps: 카메라 프레임 레이트
+        gesture_name: Name of gesture to collect (e.g., 'A', 'B', 'Idle')
+        duration: Collection time (seconds)
+        fps: Camera frame rate
         
     Returns:
-        수집된 데이터 리스트 (각 항목: [feature_vector, label])
+        List of collected data (each item: [feature_vector, label])
     """
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FPS, fps)
@@ -56,12 +56,12 @@ def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) ->
     ) as hands:
         
         print(f"\n{'='*50}")
-        print(f"제스처 '{gesture_name}' 수집 준비 중...")
-        print(f"3초 후 자동으로 {duration}초간 녹화를 시작합니다.")
-        print("여러 각도로 손을 움직이며 제스처를 취해주세요!")
+        print(f"Preparing to collect gesture '{gesture_name}'...")
+        print(f"Recording will start automatically in 3 seconds for {duration} seconds.")
+        print("Move your hand in different angles while performing the gesture!")
         print(f"{'='*50}\n")
         
-        # 3초 카운트다운
+        # 3-second countdown
         for i in range(3, 0, -1):
             ret, frame = cap.read()
             if ret:
@@ -71,25 +71,25 @@ def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) ->
                 cv2.imshow('Data Collection', frame)
                 cv2.waitKey(1000)
         
-        # 데이터 수집 시작
-        print(f"✓ 녹화 시작! ({duration}초)")
+        # Data collection start
+        print(f"✓ Recording started! ({duration} seconds)")
         frame_count = 0
         total_frames = duration * fps
         
         while frame_count < total_frames:
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] 카메라에서 프레임을 읽을 수 없습니다.")
+                print("[ERROR] Cannot read frame from camera.")
                 break
             
-            # 좌우 반전
+            # Flip left-right
             frame = cv2.flip(frame, 1)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # MediaPipe로 손 검출
+            # Detect hand with MediaPipe
             results = hands.process(rgb_frame)
             
-            # 진행 상황 표시
+            # Progress display
             progress = int((frame_count / total_frames) * 100)
             cv2.putText(frame, f"Recording: {gesture_name}", (50, 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
@@ -98,14 +98,14 @@ def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) ->
             cv2.putText(frame, f"Frames: {len(collected_data)}", (50, 150),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
             
-            # 손이 감지되면 특징 추출
+            # If hand is detected, extract features
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
-                    # 손 랜드마크 그리기
+                    # Draw hand landmarks
                     mp_drawing.draw_landmarks(
                         frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                     
-                    # 특징 추출
+                    # Extract features
                     features = extract_features_from_mediapipe(hand_landmarks)
                     if features is not None:
                         collected_data.append([features, gesture_name])
@@ -113,12 +113,12 @@ def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) ->
             cv2.imshow('Data Collection', frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("\n[INFO] 사용자가 수집을 중단했습니다.")
+                print("\n[INFO] User stopped collection.")
                 break
             
             frame_count += 1
         
-        print(f"✓ 녹화 완료! 수집된 샘플 수: {len(collected_data)}")
+        print(f"✓ Recording completed! Collected samples: {len(collected_data)}")
     
     cap.release()
     cv2.destroyAllWindows()
@@ -128,98 +128,98 @@ def collect_gesture_data(gesture_name: str, duration: int = 5, fps: int = 30) ->
 
 def save_to_csv(data_list: list):
     """
-    수집된 데이터를 CSV 파일로 저장
+    Save collected data to CSV file
     
     Args:
-        data_list: [[feature_vector, label], ...] 형태의 데이터
+        data_list: Data in format [[feature_vector, label], ...]
     """
     if len(data_list) == 0:
-        print("[WARNING] 저장할 데이터가 없습니다.")
+        print("[WARNING] No data to save.")
         return
     
-    # 데이터프레임 생성
+    # Create dataframe
     features = np.array([item[0] for item in data_list])
     labels = [item[1] for item in data_list]
     
-    # 컬럼 이름 생성 (feature_0, feature_1, ..., feature_39, label)
+    # Generate column names (feature_0, feature_1, ..., feature_39, label)
     columns = [f"feature_{i}" for i in range(features.shape[1])] + ["label"]
     
-    # 데이터프레임 생성
+    # Create dataframe
     df_new = pd.DataFrame(
         np.column_stack([features, labels]),
         columns=columns
     )
     
-    # 기존 CSV 파일이 있으면 추가, 없으면 새로 생성
+    # If existing CSV file exists, append; otherwise create new
     if os.path.exists(CSV_FILE):
         df_existing = pd.read_csv(CSV_FILE)
         df_combined = pd.concat([df_existing, df_new], ignore_index=True)
         df_combined.to_csv(CSV_FILE, index=False)
-        print(f"✓ 기존 데이터에 {len(df_new)}개 샘플 추가됨")
-        print(f"  총 샘플 수: {len(df_combined)}")
+        print(f"✓ Added {len(df_new)} samples to existing data")
+        print(f"  Total samples: {len(df_combined)}")
     else:
         df_new.to_csv(CSV_FILE, index=False)
-        print(f"✓ 새 CSV 파일 생성: {CSV_FILE}")
-        print(f"  저장된 샘플 수: {len(df_new)}")
+        print(f"✓ Created new CSV file: {CSV_FILE}")
+        print(f"  Saved samples: {len(df_new)}")
 
 
 def show_data_summary():
-    """저장된 데이터의 요약 정보 출력"""
+    """Print summary of saved data"""
     if not os.path.exists(CSV_FILE):
-        print("[INFO] 아직 수집된 데이터가 없습니다.")
+        print("[INFO] No data collected yet.")
         return
     
     df = pd.read_csv(CSV_FILE)
     print("\n" + "="*50)
-    print("현재 저장된 데이터 요약")
+    print("Current Saved Data Summary")
     print("="*50)
-    print(f"총 샘플 수: {len(df)}")
-    print(f"특징 벡터 차원: {len(df.columns) - 1}")
-    print("\n제스처별 샘플 수:")
+    print(f"Total samples: {len(df)}")
+    print(f"Feature vector dimension: {len(df.columns) - 1}")
+    print("\nSamples per gesture:")
     print(df['label'].value_counts().to_string())
     print("="*50 + "\n")
 
 
 def main():
-    """메인 실행 함수"""
+    """Main execution function"""
     print("\n" + "="*50)
-    print("ASL 제스처 데이터 수집 시스템")
+    print("ASL Gesture Data Collection System")
     print("="*50)
     
     setup_data_directory()
     show_data_summary()
     
-    print("\n수집할 제스처 목록:")
+    print("\nGestures to collect:")
     for i, gesture in enumerate(GESTURE_LIST, 1):
         print(f"  {i}. {gesture}")
     
     while True:
         print("\n" + "-"*50)
-        gesture_name = input("녹화할 제스처 이름을 입력하세요 (종료: q): ").strip()
+        gesture_name = input("Enter gesture name to record (quit: q): ").strip()
         
         if gesture_name.lower() == 'q':
-            print("\n프로그램을 종료합니다.")
+            print("\nExiting program.")
             break
         
         if not gesture_name:
-            print("[ERROR] 제스처 이름을 입력해주세요.")
+            print("[ERROR] Please enter a gesture name.")
             continue
         
-        # 수집 시간 입력
+        # Input collection time
         try:
-            duration_input = input(f"수집 시간(초)을 입력하세요 (기본값: 10초): ").strip()
+            duration_input = input(f"Enter collection time (seconds) (default: 10 seconds): ").strip()
             duration = int(duration_input) if duration_input else 10
         except ValueError:
-            print("[WARNING] 잘못된 입력입니다. 기본값 10초로 설정합니다.")
+            print("[WARNING] Invalid input. Setting to default 10 seconds.")
             duration = 10
         
-        # 데이터 수집
+        # Data collection
         collected = collect_gesture_data(gesture_name, duration)
         
-        # CSV로 저장
+        # Save to CSV
         save_to_csv(collected)
         
-        # 요약 정보 출력
+        # Print summary info
         show_data_summary()
 
 

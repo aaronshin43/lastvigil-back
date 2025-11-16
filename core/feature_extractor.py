@@ -1,6 +1,6 @@
 """
-ASL 제스처 인식을 위한 특징 추출 모듈
-MediaPipe Hands 랜드마크를 정규화하여 위치/크기 불변 특징 생성
+Feature extraction module for ASL gesture recognition
+Normalizes MediaPipe Hands landmarks to create position/size invariant features
 """
 
 import numpy as np
@@ -9,20 +9,20 @@ from typing import List, Tuple, Optional
 
 def normalize_landmarks(landmarks: List[Tuple[float, float]]) -> Optional[np.ndarray]:
     """
-    MediaPipe 손 랜드마크를 정규화하여 위치/크기 불변 특징 벡터 생성
+    Normalizes MediaPipe hand landmarks to create position/size invariant feature vectors
     
-    정규화 과정:
-    1. 위치 정규화: 손목(0번)을 원점(0,0)으로 이동
-    2. 크기 정규화: 손목(0번)~중지 바닥(9번) 거리로 전체 스케일 조정
+    Normalization process:
+    1. Position normalization: Move wrist (landmark 0) to origin (0,0)
+    2. Size normalization: Scale entire hand using distance from wrist (0) to middle finger base (9)
     
     Args:
-        landmarks: 21개 랜드마크의 (x, y) 좌표 리스트
+        landmarks: List of (x, y) coordinates for 21 landmarks
         
     Returns:
-        정규화된 40개 특징값 (20개 점의 x, y 좌표) 또는 None (에러 시)
+        Normalized 40 feature values (x, y coordinates of 20 points) or None (on error)
     """
     if len(landmarks) != 21:
-        print(f"[WARNING] 랜드마크 개수가 21개가 아닙니다: {len(landmarks)}")
+        print(f"[WARNING] Number of landmarks is not 21: {len(landmarks)}")
         return None
     
     # NumPy 배열로 변환 (21, 2)
@@ -36,9 +36,9 @@ def normalize_landmarks(landmarks: List[Tuple[float, float]]) -> Optional[np.nda
     middle_mcp = points_centered[9]  # 중지 바닥 (MCP: Metacarpophalangeal joint)
     scale = np.linalg.norm(middle_mcp)
     
-    # 스케일이 너무 작으면 (손이 너무 멀거나 감지 오류) None 반환
+    # Scale is too small (hand too far or detection error) return None
     if scale < 1e-6:
-        print("[WARNING] 손 크기가 너무 작습니다. 랜드마크 감지 오류일 수 있습니다.")
+        print("[WARNING] Hand size is too small. May be a landmark detection error.")
         return None
     
     points_normalized = points_centered / scale
@@ -51,13 +51,13 @@ def normalize_landmarks(landmarks: List[Tuple[float, float]]) -> Optional[np.nda
 
 def extract_features_from_mediapipe(hand_landmarks) -> Optional[np.ndarray]:
     """
-    MediaPipe Hands 객체에서 직접 특징 추출
+    Extract features directly from MediaPipe Hands object
     
     Args:
-        hand_landmarks: mediapipe.python.solutions.hands.HandLandmark 객체
+        hand_landmarks: mediapipe.python.solutions.hands.HandLandmark object
         
     Returns:
-        정규화된 40개 특징값 또는 None
+        Normalized 40 feature values or None
     """
     if hand_landmarks is None:
         return None
@@ -70,13 +70,13 @@ def extract_features_from_mediapipe(hand_landmarks) -> Optional[np.ndarray]:
 
 def batch_normalize_landmarks(landmarks_batch: List[List[Tuple[float, float]]]) -> np.ndarray:
     """
-    여러 프레임의 랜드마크를 배치로 정규화
+    Batch normalize landmarks from multiple frames
     
     Args:
-        landmarks_batch: 각 프레임의 21개 랜드마크 리스트
+        landmarks_batch: List of 21 landmarks for each frame
         
     Returns:
-        정규화된 특징 배열 (N, 40) - N은 유효한 프레임 수
+        Normalized feature array (N, 40) - N is number of valid frames
     """
     features_list = []
     
@@ -86,7 +86,7 @@ def batch_normalize_landmarks(landmarks_batch: List[List[Tuple[float, float]]]) 
             features_list.append(features)
     
     if len(features_list) == 0:
-        print("[WARNING] 유효한 랜드마크가 하나도 없습니다.")
+        print("[WARNING] No valid landmarks found.")
         return np.array([])
     
     return np.array(features_list)
@@ -94,10 +94,10 @@ def batch_normalize_landmarks(landmarks_batch: List[List[Tuple[float, float]]]) 
 
 def get_landmark_names() -> List[str]:
     """
-    MediaPipe Hands 21개 랜드마크 이름 반환 (디버깅/시각화용)
+    Return names of 21 MediaPipe Hands landmarks (for debugging/visualization)
     
     Returns:
-        랜드마크 이름 리스트
+        List of landmark names
     """
     return [
         "WRIST",           # 0
@@ -125,21 +125,21 @@ def get_landmark_names() -> List[str]:
 
 
 if __name__ == "__main__":
-    # 테스트 코드
+    # Test code
     print("=" * 50)
-    print("Feature Extractor 테스트")
+    print("Feature Extractor Test")
     print("=" * 50)
     
-    # 가짜 랜드마크 데이터 (21개 점)
+    # Fake landmark data (21 points)
     test_landmarks = [(i * 0.05, i * 0.03) for i in range(21)]
     
     features = normalize_landmarks(test_landmarks)
     if features is not None:
-        print(f"✓ 정규화 성공! 특징 벡터 크기: {features.shape}")
-        print(f"  특징값 범위: [{features.min():.3f}, {features.max():.3f}]")
+        print(f"✓ Normalization successful! Feature vector size: {features.shape}")
+        print(f"  Feature value range: [{features.min():.3f}, {features.max():.3f}]")
     else:
-        print("✗ 정규화 실패")
+        print("✗ Normalization failed")
     
-    print("\n랜드마크 이름:")
+    print("\nLandmark names:")
     for i, name in enumerate(get_landmark_names()):
         print(f"  {i:2d}: {name}")

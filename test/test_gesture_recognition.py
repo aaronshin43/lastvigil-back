@@ -1,6 +1,6 @@
 """
-실시간 제스처 인식 테스트 스크립트
-훈련된 모델을 로드하여 웹캠으로 손 제스처를 실시간으로 판별
+Real-time gesture recognition test script
+Loads trained model and recognizes hand gestures in real-time from webcam
 """
 
 import cv2
@@ -30,44 +30,44 @@ CONFIDENCE_THRESHOLD = 0.95  # 60% 미만이면 제스처로 인식하지 않음
 
 def load_model():
     """
-    훈련된 모델 로드
+    Load trained model
     
     Returns:
-        model: 로드된 모델
-        scaler: 스케일러 (있으면), 없으면 None
+        model: Loaded model
+        scaler: Scaler (if exists), otherwise None
     """
     if not os.path.exists(MODEL_FILE):
         raise FileNotFoundError(
-            f"[ERROR] 모델 파일을 찾을 수 없습니다: {MODEL_FILE}\n"
-            f"먼저 train.py를 실행하여 모델을 훈련시켜주세요."
+            f"[ERROR] Model file not found: {MODEL_FILE}\n"
+            f"Please run train.py first to train the model."
         )
     
-    print(f"모델 로드 중: {MODEL_FILE}")
+    print(f"Loading model: {MODEL_FILE}")
     model = joblib.load(MODEL_FILE)
-    print(f"✓ 모델 로드 완료: {type(model).__name__}")
+    print(f"✓ Model loaded: {type(model).__name__}")
     
-    # 스케일러가 있으면 로드
+    # Load scaler if exists
     scaler = None
     if os.path.exists(SCALER_FILE):
         scaler = joblib.load(SCALER_FILE)
-        print(f"✓ 스케일러 로드 완료")
+        print(f"✓ Scaler loaded")
     
     return model, scaler
 
 
 def predict_gesture(model, features, scaler=None, threshold=CONFIDENCE_THRESHOLD):
     """
-    특징 벡터로부터 제스처 예측
+    Predict gesture from feature vector
     
     Args:
-        model: 훈련된 모델
-        features: 특징 벡터 (40,)
-        scaler: 스케일러 (선택)
-        threshold: 확신도 임계값 (이 값보다 낮으면 "Unknown" 반환)
+        model: Trained model
+        features: Feature vector (40,)
+        scaler: Scaler (optional)
+        threshold: Confidence threshold (return "Unknown" if below this value)
         
     Returns:
-        predicted_label: 예측된 제스처 라벨 또는 "Unknown"
-        confidence: 예측 확신도 (0~1)
+        predicted_label: Predicted gesture label or "Unknown"
+        confidence: Prediction confidence (0~1)
     """
     # 특징을 2D 배열로 변환 (1, 40)
     features_2d = features.reshape(1, -1)
@@ -79,32 +79,32 @@ def predict_gesture(model, features, scaler=None, threshold=CONFIDENCE_THRESHOLD
     # 예측
     predicted_label = model.predict(features_2d)[0]
     
-    # 확신도 계산 (확률을 지원하는 모델인 경우)
+    # Confidence calculation (for models that support probabilities)
     confidence = 0.0
     if hasattr(model, 'predict_proba'):
-        # 확률 기반 확신도 (SVM, Random Forest 등)
+        # Probability-based confidence (SVM, Random Forest, etc.)
         probabilities = model.predict_proba(features_2d)[0]
         confidence = np.max(probabilities)
         
-        # 추가 검증: 1위와 2위 확률 차이가 작으면 확신도 감소
+        # Additional validation: Reduce confidence if margin between top 2 is small
         sorted_probs = np.sort(probabilities)[::-1]
         if len(sorted_probs) > 1:
             margin = sorted_probs[0] - sorted_probs[1]
-            # margin이 작으면 (0.1 미만) 확신도를 낮춤
+            # If margin is small (< 0.1), reduce confidence
             if margin < 0.1:
-                confidence = confidence * 0.7  # 확신도 30% 감소
+                confidence = confidence * 0.7  # Reduce confidence by 30%
     elif hasattr(model, 'decision_function'):
-        # SVM의 경우 decision_function 사용 (probability=False일 때)
+        # For SVM when probability=False
         decision_values = model.decision_function(features_2d)[0]
         if isinstance(decision_values, np.ndarray):
             confidence = np.max(decision_values) / np.sum(np.abs(decision_values))
         else:
             confidence = 1.0
     else:
-        # KNN 등 확률을 지원하지 않는 모델
-        confidence = 0.5  # 기본값을 낮춤 (Unknown 처리 유도)
+        # For models that don't support probabilities like KNN
+        confidence = 0.5  # Lower default to encourage Unknown
     
-    # 확신도가 임계값보다 낮으면 Unknown으로 처리
+    # If confidence is below threshold, treat as Unknown
     if confidence < threshold:
         predicted_label = "Unknown"
     
@@ -112,12 +112,12 @@ def predict_gesture(model, features, scaler=None, threshold=CONFIDENCE_THRESHOLD
 
 
 def main():
-    """메인 실행 함수"""
+    """Main execution function"""
     print("\n" + "="*60)
-    print("실시간 ASL 제스처 인식 테스트")
+    print("Real-time ASL Gesture Recognition Test")
     print("="*60)
-    print(f"확신도 임계값: {CONFIDENCE_THRESHOLD:.0%} (이 값 미만은 Unknown 처리)")
-    print("ESC 또는 Q 키를 눌러 종료\n")
+    print(f"Confidence threshold: {CONFIDENCE_THRESHOLD:.0%} (Treat as Unknown if below)")
+    print("Press ESC or Q to exit\n")
     
     # 모델 로드
     try:
@@ -130,7 +130,7 @@ def main():
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FPS, 30)
     
-    # 예측 결과 안정화를 위한 버퍼 (최근 N개 예측 저장)
+    # Prediction buffer for stabilization (store recent N predictions)
     prediction_buffer = []
     buffer_size = 5
     
@@ -141,12 +141,12 @@ def main():
         min_tracking_confidence=0.5
     ) as hands:
         
-        print("✓ 웹캠 시작\n")
+        print("✓ Webcam started\n")
         
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] 카메라에서 프레임을 읽을 수 없습니다.")
+                print("[ERROR] Cannot read frame from camera.")
                 break
             
             # 좌우 반전
@@ -156,58 +156,58 @@ def main():
             # MediaPipe로 손 검출
             results = hands.process(rgb_frame)
             
-            # 화면에 표시할 텍스트
+            # Text to display on screen
             status_text = "No hand detected"
             gesture_text = ""
             confidence_text = ""
-            color = (0, 0, 255)  # 빨간색 (손 없음)
+            color = (0, 0, 255)  # Red (no hand)
             
             # 손이 감지되면 예측
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
-                    # 손 랜드마크 그리기
+                    # Draw hand landmarks
                     mp_drawing.draw_landmarks(
                         frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
                         mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                         mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
                     )
                     
-                    # 특징 추출
+                    # Extract features
                     features = extract_features_from_mediapipe(hand_landmarks)
                     
                     if features is not None:
-                        # 제스처 예측
+                        # Predict gesture
                         predicted_label, confidence = predict_gesture(model, features, scaler)
                         
-                        # 예측 버퍼에 추가 (안정화)
+                        # Add to prediction buffer (stabilization)
                         prediction_buffer.append(predicted_label)
                         if len(prediction_buffer) > buffer_size:
                             prediction_buffer.pop(0)
                         
-                        # 가장 많이 예측된 제스처 선택
+                        # Select most common gesture
                         if len(prediction_buffer) > 0:
                             from collections import Counter
                             most_common = Counter(prediction_buffer).most_common(1)[0][0]
                             
-                            # Unknown 제스처 처리
+                            # Handle Unknown gesture
                             if most_common == "Unknown":
                                 status_text = "Hand detected"
                                 gesture_text = "Gesture: Unknown"
                                 confidence_text = f"Confidence: {confidence:.2%} (Too low)"
-                                color = (0, 165, 255)  # 주황색 (불확실)
+                                color = (0, 165, 255)  # Orange (uncertain)
                             else:
                                 status_text = "Recognizing gesture..."
                                 gesture_text = f"Gesture: {most_common}"
                                 confidence_text = f"Confidence: {confidence:.2%}"
-                                color = (0, 255, 0)  # 초록색 (인식 성공)
+                                color = (0, 255, 0)  # Green (success)
                             
-                            # 콘솔에도 출력
+                            # Also print to console
                             # print(f"[PREDICT] {most_common} (Confidence: {confidence:.2%})", end='\r')
             else:
-                # 손이 없으면 버퍼 초기화
+                # Clear buffer if no hand
                 prediction_buffer.clear()
             
-            # 화면에 정보 표시
+            # Display info on screen
             cv2.putText(frame, status_text, (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             
@@ -217,7 +217,7 @@ def main():
                 cv2.putText(frame, confidence_text, (10, 110),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # 사용법 및 임계값 표시
+            # Display usage and threshold
             cv2.putText(frame, f"Threshold: {CONFIDENCE_THRESHOLD:.0%} | ESC or Q: Exit", 
                        (10, frame.shape[0] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
@@ -227,7 +227,7 @@ def main():
             # 키 입력 처리
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or key == ord('q'):  # ESC or Q
-                print("\n\n프로그램을 종료합니다.")
+                print("\n\nExiting program.")
                 break
     
     cap.release()
