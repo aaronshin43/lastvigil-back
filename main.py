@@ -78,7 +78,7 @@ SKILL_TYPES = [
 # Enemy info (HP, speed, score)
 ENEMY_CONFIG = {
     # Tier 1: Basic monsters (10 points)
-    "slime": {"hp": 50, "speed": 200, "score": 10},
+    "slime": {"hp": 50, "speed": 45, "score": 10},
     "skeleton": {"hp": 80, "speed": 50, "score": 10},
     "orc": {"hp": 100, "speed": 45, "score": 10},
     # Tier 2: Intermediate monsters (15 points)
