@@ -7,6 +7,7 @@ import joblib
 import asyncio
 import time
 import uuid
+import json
 from pathlib import Path
 from typing import List, Dict, Set
 from fastapi import FastAPI, WebSocket
@@ -532,8 +533,24 @@ async def websocket_endpoint(websocket: WebSocket):
         latestAIInput = ai_sessions[session_id]  # 세션별 AI 입력 참조
         
         while True:
-            # 1. 클라이언트(JS)로부터 Base64 이미지(텍스트) 수신
+            # 1. 클라이언트(JS)로부터 메시지 수신 (Base64 이미지 또는 JSON 명령)
             data = await websocket.receive_text()
+            
+            # JSON 명령 처리 (스킵 버튼)
+            try:
+                message = json.loads(data)
+                if message.get("type") == "skipGesture":
+                    gameState = game_sessions.get(session_id)
+                    if gameState and len(gameState["gestureSequence"]) > 0:
+                        # 첫 번째 알파벳 제거하고 새로운 알파벳 추가
+                        gameState["gestureSequence"].pop(0)
+                        gameState["gestureSequence"].append(np.random.choice(AVAILABLE_GESTURES))
+                        print(f"[Game] 알파벳 스킵! (세션: {session_id[:8]}...)")
+                    continue
+            except json.JSONDecodeError:
+                pass  # Base64 이미지인 경우 계속 진행
+            
+            # Base64 이미지 파싱
             img_data = data.split(',')[1]
             img_bytes = base64.b64decode(img_data)
             img_np = np.frombuffer(img_bytes, np.uint8)
