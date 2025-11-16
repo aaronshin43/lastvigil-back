@@ -11,9 +11,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import pandas as pd
+import random
 from core.feature_extractor import normalize_landmarks
 
-IMAGE_ROOT = os.path.join("data", "images", "archive", "asl_alphabet_train", "asl_alphabet_train")
+# IMAGE_ROOT = os.path.join("data", "images", "archive", "asl_alphabet_train", "asl_alphabet_train")
+IMAGE_ROOT = os.path.join("data", "images", "archive2", "ASL_Alphabet_Dataset", "asl_alphabet_train")
 DATA_DIR = "data"
 CSV_FILE = os.path.join(DATA_DIR, "gestures.csv")
 
@@ -90,6 +92,14 @@ def process_images(target_gestures=None, max_samples_per_gesture=None):
             
             image_files = [f for f in os.listdir(gesture_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
             print(f"[DEBUG] 발견된 이미지 파일 수: {len(image_files)}")
+            
+            # 랜덤 샘플링 (최대 샘플 수가 설정되어 있고, 이미지가 더 많을 경우)
+            if max_samples_per_gesture and len(image_files) > max_samples_per_gesture:
+                # 반전 사용 시 절반만 샘플링 (나머지는 반전으로 채움)
+                sample_count = max_samples_per_gesture // 2 if use_flip else max_samples_per_gesture
+                image_files = random.sample(image_files, sample_count)
+                print(f"[DEBUG] 랜덤 샘플링: {len(image_files)}개 선택됨")
+            
             if len(image_files) > 0:
                 print(f"[DEBUG] 첫 5개 이미지: {image_files[:5]}")
             
