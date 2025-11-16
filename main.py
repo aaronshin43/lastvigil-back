@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # ASL 제스처 인식을 위한 특징 추출 모듈
 from core.feature_extractor import extract_features_from_mediapipe
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+
 app = FastAPI()
 # test
 # CORS 설정 (모든 출처 허용 - 테스트용)
@@ -165,6 +168,7 @@ class Player:
         skill_type = skill_types.get(gesture, "fireSlash")
         
         # 시선 위치를 화면 좌표로 변환 (예: 1920x1080)
+        # 0.0~1.0 범위를 0~1920, 0~1080으로 변환
         target_x = gaze_x * 1920
         target_y = gaze_y * 1080
         
@@ -278,8 +282,8 @@ async def game_loop():
                 "enemies": [e.to_dict() for e in gameState["enemies"]],
                 "effects": [e.to_dict() for e in gameState["effects"]],
                 "gazePosition": {
-                    "x": latestAIInput["gaze_x"] * 1920,
-                    "y": latestAIInput["gaze_y"] * 1080
+                    "x": latestAIInput["gaze_x"],
+                    "y": latestAIInput["gaze_y"]
                 },
                 "playerGold": gameState["playerGold"],
                 "playerScore": gameState["playerScore"],
@@ -405,15 +409,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 "hand": "NONE",
                 "gesture": "NONE",  # ASL 제스처 인식 결과
                 "hand_landmarks": [],
-                "face_key_points": {
-                    "nose_tip": None,
-                    "chin": None,
-                    "forehead": None,
-                    "left_face": None,
-                    "right_face": None,
-                    "left_eye": None,
-                    "right_eye": None
-                },
                 "gaze": {
                     "x": 0.5,
                     "y": 0.5,
@@ -450,13 +445,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         print(f"[ASL] 제스처 인식 오류: {e}") 
 
             # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-            # ★ 변경: 얼굴 주요 포인트만 추출 + Gaze 계산
+            # ★ 변경: 얼굴 주요 포인트 추출 + Gaze 계산 (내부용만)
             # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
             if results_face.multi_face_landmarks:
                 landmarks = results_face.multi_face_landmarks[0].landmark
                 
-                # 주요 포인트 추출 및 전송
-                response_data["face_key_points"] = {
+                # 주요 포인트 추출 (내부 계산용)
+                face_key_points = {
                     "nose_tip": {"x": landmarks[1].x, "y": landmarks[1].y, "z": landmarks[1].z},
                     "chin": {"x": landmarks[152].x, "y": landmarks[152].y, "z": landmarks[152].z},
                     "forehead": {"x": landmarks[10].x, "y": landmarks[10].y, "z": landmarks[10].z},
@@ -467,7 +462,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 }
                 
                 # Gaze 계산
-                gaze_data = calculate_gaze(response_data["face_key_points"])
+                gaze_data = calculate_gaze(face_key_points)
                 response_data["gaze"] = gaze_data
                 
                 # latestAIInput 전역 변수 업데이트
