@@ -58,20 +58,20 @@ session_tasks: Dict[str, asyncio.Task] = {}  # {session_id: game_loop_task}
 
 # ==================== 게임 로직 클래스 ====================
 
-# 적군 정보 (HP, 속도)
+# 적군 정보 (HP, 속도, 점수)
 ENEMY_CONFIG = {
-    # Tier 1: 기본 몬스터
-    "slime": {"hp": 50, "speed": 40},
-    "skeleton": {"hp": 80, "speed": 50},
-    "orc": {"hp": 100, "speed": 45},
-    # Tier 2: 중급 몬스터
-    "skeletonArcher": {"hp": 120, "speed": 55},
-    "armoredSkeleton": {"hp": 150, "speed": 40},
-    "greatswordSkeleton": {"hp": 180, "speed": 35},
-    # Tier 3: 고급 몬스터
-    "armoredOrc": {"hp": 250, "speed": 50},
-    "elitOrc": {"hp": 300, "speed": 55},
-    "orcRider": {"hp": 350, "speed": 60},
+    # Tier 1: 기본 몬스터 (10점)
+    "slime": {"hp": 50, "speed": 40, "score": 10},
+    "skeleton": {"hp": 80, "speed": 50, "score": 10},
+    "orc": {"hp": 100, "speed": 45, "score": 10},
+    # Tier 2: 중급 몬스터 (15점)
+    "skeletonArcher": {"hp": 120, "speed": 55, "score": 15},
+    "armoredSkeleton": {"hp": 150, "speed": 40, "score": 15},
+    "greatswordSkeleton": {"hp": 180, "speed": 35, "score": 15},
+    # Tier 3: 고급 몬스터 (20점)
+    "armoredOrc": {"hp": 250, "speed": 50, "score": 20},
+    "elitOrc": {"hp": 300, "speed": 55, "score": 20},
+    "orcRider": {"hp": 350, "speed": 60, "score": 20},
 }
 
 # 웨이브별 적군 티어
@@ -80,27 +80,37 @@ WAVE_ENEMY_TIERS = {
     2: ["slime", "skeleton", "orc"],
     3: ["skeleton", "orc", "skeletonArcher"],
     4: ["orc", "skeletonArcher", "armoredSkeleton"],
-    5: ["skeletonArcher", "armoredSkeleton", "greatswordSkeleton"],
-    # 6웨이브 이상부터 Tier 3 등장
+    5: ["skeletonArcher", "armoredSkeleton", "greatswordSkeleton", "armoredOrc", "elitOrc", "orcRider"],
+}
+
+# 웨이브별 목표 점수 (해당 점수 도달 시 다음 웨이브)
+WAVE_SCORE_THRESHOLDS = {
+    1: 100,   # 100점 도달 시 웨이브 2
+    2: 250,   # 250점 도달 시 웨이브 3
+    3: 450,   # 450점 도달 시 웨이브 4
+    4: 700,   # 700점 도달 시 웨이브 5 (최종)
+    5: float('inf')  # 웨이브 5는 무한
 }
 
 class Enemy:
     """적 엔티티"""
-    def __init__(self, enemy_id: str, type_id: str, x: float, y: float):
+    def __init__(self, enemy_id: str, type_id: str, x: float, y: float, hp_bonus: int = 0, speed_multiplier: float = 1.0):
         self.id = enemy_id
         self.typeId = type_id
         self.x = x
         self.y = y
         
         # 적 타입에 따른 HP와 속도 설정
-        config = ENEMY_CONFIG.get(type_id, {"hp": 100, "speed": 50})
-        self.maxHP = config["hp"]
+        config = ENEMY_CONFIG.get(type_id, {"hp": 100, "speed": 50, "score": 10})
+        self.maxHP = config["hp"] + hp_bonus  # HP 보너스 추가
         self.currentHP = self.maxHP
-        self.speed = config["speed"]  # pixels per second
+        self.speed = config["speed"] * speed_multiplier  # 속도 배율 적용
+        self.score = config["score"]  # 사망 시 획듩 점수
         
         self.animationState = "walk"
         self.currentFrame = 0
         self.isDead = False
+        self.scoreGiven = False  # 점수 지급 여부
         self.direction = -1 if x > 500 else 1  # 오른쪽에서 시작하면 왼쪽으로
         self.hurtFrameCount = 0  # hurt 애니메이션 지속 프레임
     
@@ -216,32 +226,25 @@ def spawn_enemy(session_id: str):
     gameState = game_sessions[session_id]
     current_wave = gameState["waveNumber"]
     
-    # 웨이브별 적군 선택 (낮은 티어도 계속 등장)
-    if current_wave <= 5:
-        enemy_pool = WAVE_ENEMY_TIERS.get(current_wave, ["skeleton", "orc"])
-    else:
-        # 6웨이브 이상: 모든 티어 혼합 (낮은 티어 확률 낮춤)
-        tier1 = ["slime", "skeleton", "orc"]
-        tier2 = ["skeletonArcher", "armoredSkeleton", "greatswordSkeleton"]
-        tier3 = ["armoredOrc", "elitOrc", "orcRider"]
-        
-        # Tier 1: 20%, Tier 2: 40%, Tier 3: 40%
-        tier_choice = np.random.random()
-        if tier_choice < 0.2:
-            enemy_pool = tier1
-        elif tier_choice < 0.6:
-            enemy_pool = tier2
-        else:
-            enemy_pool = tier3
-    
+    # 웨이브별 적군 선택
+    enemy_pool = WAVE_ENEMY_TIERS.get(current_wave, ["skeleton", "orc"])
     type_id = np.random.choice(enemy_pool)
+    
+    # 웨이브 5에서 HP 증가 (생성한 적 수에 비례)
+    hp_bonus = 0
+    if current_wave == 5:
+        hp_bonus = gameState.get("wave5EnemyCount", 0) * 5  # 적 1마리당 +5 HP
+        gameState["wave5EnemyCount"] = gameState.get("wave5EnemyCount", 0) + 1
+    
+    # 웨이브별 속도 증가 (웨이브당 10% 증가)
+    speed_multiplier = 1.0 + (current_wave - 1) * 0.1  # 웨이브 1: 1.0x, 2: 1.1x, 3: 1.2x, 4: 1.3x, 5: 1.4x
     
     # 오른쪽 스폰 (맵 width 2148 픽셀 기준)
     x = 2000
     # y축: 화면 하단 50~70% (1080 기준 540~756)
     y = 648 + np.random.randint(0, 217)  # 540 + [0~216]
     
-    enemy = Enemy(enemy_id, type_id, x, y)
+    enemy = Enemy(enemy_id, type_id, x, y, hp_bonus, speed_multiplier)
     gameState["enemies"].append(enemy)
     
     config = ENEMY_CONFIG.get(type_id, {})
@@ -288,33 +291,62 @@ async def game_loop(websocket: WebSocket, session_id: str):
     
     last_spawn_time = time.time()
     spawn_interval = 3.0  # 3초마다 적 생성
-    gameState["waveStartTime"] = time.time()  # 웨이브 시작 시간 기록
     
     try:
         while True:
             loop_start = time.time()
             delta_time = 0.05  # 20fps
             
-            # 0. 웨이브 진행 체크 (10초마다 웨이브 증가)
-            wave_elapsed = time.time() - gameState["waveStartTime"]
-            if wave_elapsed >= 10.0:
+            # 0. 웨이브 진행 체크 (점수 기반)
+            current_wave = gameState["waveNumber"]
+            current_score = gameState["playerScore"]
+            threshold = WAVE_SCORE_THRESHOLDS.get(current_wave, float('inf'))
+            
+            if current_wave < 5 and current_score >= threshold:
                 gameState["waveNumber"] += 1
-                gameState["waveStartTime"] = time.time()
-                print(f"[Game] 웨이브 {gameState['waveNumber']} 시작! (세션: {session_id[:8]}...)")
+                print(f"[Game] 웨이브 {gameState['waveNumber']} 시작! (세션: {session_id[:8]}..., 점수: {current_score})")
             
             # 1. 적 스포너
             if time.time() - last_spawn_time > spawn_interval:
                 spawn_enemy(session_id)
                 last_spawn_time = time.time()
             
-            # 2. 적 업데이트 (이동)
+            # 2. 적 업데이트 (이동 및 화면 이탈 체크)
             for enemy in gameState["enemies"]:
                 enemy.update(delta_time)
+                
+                # 적이 화면 왼쪽 끝에 도달하면 플레이어 HP 감소
+                if enemy.x <= 0 and not enemy.isDead:
+                    gameState["playerHP"] -= 100
+                    enemy.isDead = True  # 도달한 적은 제거
+                    print(f"[Game] 적 통과! HP: {gameState['playerHP']} (세션: {session_id[:8]}...)")
             
-            # 3. 죽은 적 제거
+            # 3. 죽은 적 제거 및 점수 획듩 (한 번만)
+            for enemy in gameState["enemies"]:
+                if enemy.isDead and not enemy.scoreGiven:
+                    # 적 사망 시 티어별 점수 획듩 (Tier 1: 10, Tier 2: 15, Tier 3: 20)
+                    gameState["playerScore"] += enemy.score
+                    enemy.scoreGiven = True
+            
             gameState["enemies"] = [e for e in gameState["enemies"] if not e.isDead or time.time() - gameState["lastSkillTime"] < 1.0]
             
-            # 4. AI 입력 확인 및 스킬 시전
+            # 4. 게임 오버 체크
+            if gameState["playerHP"] <= 0:
+                print(f"[Game] 게임 오버! (세션: {session_id[:8]}..., 최종 점수: {gameState['playerScore']})")
+                
+                # 게임 오버 신호 전송
+                game_over_message = {
+                    "type": "gameOver",
+                    "finalScore": gameState["playerScore"],
+                    "finalWave": gameState["waveNumber"]
+                }
+                try:
+                    await websocket.send_json(game_over_message)
+                except:
+                    pass
+                break
+            
+            # 5. AI 입력 확인 및 스킬 시전
             gesture = latestAIInput.get("gesture", "NONE")
             if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
                 skill_data = player.cast_skill(
@@ -330,16 +362,15 @@ async def game_loop(websocket: WebSocket, session_id: str):
                     effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
                     gameState["effects"].append(effect)
                     
-                    # 충돌 판정
+                    # 충돌 판정 (데미지만 부여, 점수는 사망 시 획듩)
                     hit_enemies = check_collision(session_id, skill_data)
                     for enemy in hit_enemies:
                         enemy.take_damage(skill_data["damage"])
-                        gameState["playerScore"] += 10
             
-            # 5. 만료된 이펙트 제거
+            # 6. 만료된 이펙트 제거
             gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
             
-            # 6. Full State Sync 생성 (정규화된 좌표)
+            # 7. Full State Sync 생성 (정규화된 좌표)
             gaze_x_norm = latestAIInput["gaze_x"] / 2148
             gaze_y_norm = latestAIInput["gaze_y"] / 1080
             
@@ -353,35 +384,24 @@ async def game_loop(websocket: WebSocket, session_id: str):
                     },
                     "playerGold": gameState["playerGold"],
                     "playerScore": gameState["playerScore"],
+                    "playerHP": gameState["playerHP"],
                     "waveNumber": gameState["waveNumber"]
                 }
             }
             
-            # # 좌표 로깅
-            # if gameState["enemies"]:
-            #     first_enemy = gameState["enemies"][0]
-            #     enemy_dict = first_enemy.to_dict()
-            #     print(f"[Sync] Gaze: ({gaze_x_norm:.3f}, {gaze_y_norm:.3f}) | Enemy[0]: ({enemy_dict['x']:.3f}, {enemy_dict['y']:.3f})")
-            
-            # if gameState["effects"]:
-            #     first_effect = gameState["effects"][0]
-            #     effect_dict = first_effect.to_dict()
-            #     print(f"[Sync] Effect[0]: x={effect_dict['x']:.3f}")
-            
-            # 7. 해당 세션 클라이언트에게만 전송
+            # 8. 해당 세션 클라이언트에게만 전송
             try:
                 await websocket.send_json(state_sync)
             except:
                 print(f"[Game] 세션 {session_id[:8]}... 연결 끊김")
                 break
             
-            # 8. 20fps 유지
+            # 9. 20fps 유지
             elapsed = time.time() - loop_start
             sleep_time = max(0, delta_time - elapsed)
             await asyncio.sleep(sleep_time)
     except asyncio.CancelledError:
         print(f"[Game] 세션 {session_id[:8]}... 게임 루프 종료")
-        await asyncio.sleep(sleep_time)
 
 
 def calculate_gaze(face_key_points: dict) -> dict:
@@ -478,9 +498,10 @@ async def websocket_endpoint(websocket: WebSocket):
         "effects": [],
         "playerGold": 0,
         "playerScore": 0,
+        "playerHP": 100,  # 플레이어 HP
         "waveNumber": 1,
         "lastSkillTime": 0.0,
-        "waveStartTime": 0.0
+        "wave5EnemyCount": 0  # 웨이브 5 적 카운터
     }
     
     # 세션별 AI 입력 초기화 (맵 픽셀 좌표)
