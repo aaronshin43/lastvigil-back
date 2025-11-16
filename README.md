@@ -95,3 +95,45 @@ pip install "fastapi[all]" python-socketio opencv-python-headless mediapipe nump
 
 - [ ]  폭발 또는 마법 타격 이펙트 스프라이트 재생
 - [ ]  사운드는 외부 에셋을 그대로 재생 (API 사용 없음)
+
+백엔드는 "AI 분석"과 "게임 로직"이라는 두 가지 작업을 2개의 vCPU에 분배해야 합니다.
+
+데이터 수신 및 AI 분석 (Task 1: AI Core)
+FastAPI의 WebSocket 엔드포인트(@app.websocket("/ws"))는 클라이언트로부터 10fps로 Base64 문자열을 수신합니다.
+
+문자열을 디코딩하여 OpenCV가 읽을 수 있는 Numpy 배열(이미지)로 변환합니다.
+
+이 이미지를 **MediaPipe**와 OpenCV 모듈에 밀어 넣습니다.
+
+[CPU 병목점] 2개의 vCPU가 이 이미지를 분석하느라 50ms~100ms 동안 "정지"합니다.
+
+분석이 완료되면, "원시 AI 데이터"를 생성합니다. (예: {'gesture': 'A', 'gaze': -0.85})
+
+이 결과값을 서버 내 전역 변수인 latestAIInput에 덮어씌웁니다.
+
+게임 로직 처리 (Task 2: Game Core)
+WebSocket 수신 루프와 완전히 별개로, asyncio 기반의 **서버측 "게임 루프"**가 20~30fps (예: await asyncio.sleep(0.05))로 돕니다.
+
+이 루프는 매 틱(tick)마다 latestAIInput 변수를 확인합니다.
+
+모든 게임 로직을 여기서 계산합니다:
+
+latestAIInput.gesture == 'A'인가? -> Player.castSkill() 호출.
+
+적 스포너가 적을 생성할 시간인가? -> Enemy 객체 생성.
+
+Enemy 객체의 웨이포인트 이동 좌표 계산.
+
+Player의 스킬 범위와 Enemy의 히트박스 충돌 판정.
+
+적 체력 감소 및 사망 처리.
+
+latestAIInput.gaze 값을 참조하여 특정 적을 타겟팅하거나 맵 기믹을 발동.
+
+3. 📡 응답 (Server -> Client): "명령"이 아닌 "상태"
+해커톤에서 흔히 하는 실수가 "적 3번 제거" 같은 "명령(Command)"을 보내는 것입니다. 이는 네트워크 지연 시, 클라이언트와 서버의 상태가 엇갈리는 지름길입니다.
+
+응답 형태: "전체 상태 동기화 (Full State Sync)"
+서버의 20fps 게임 루프가 끝날 때마다, 현재 게임에 존재하는 모든 것의 상태를 담은 거대한 JSON 객체를 만듭니다.
+
+이 JSON 객체를 WebSocket을 통해 클라이언트에 브로드캐스트합니다.
