@@ -65,9 +65,21 @@ def process_images(target_gestures=None, max_samples_per_gesture=None):
     
     # 이미지 반전 여부 입력
     use_flip = input("이미지를 좌우 반전하여 데이터 증강을 하시겠습니까? (y/n, 기본값: y): ").strip().lower()
+    flip_mode = None
+    
     if use_flip != 'n':
         use_flip = True
-        print("✓ 이미지 반전 적용 - 데이터가 2배로 증강됩니다.\n")
+        print("\n반전 모드를 선택하세요:")
+        print("  1. 절반만 반전 - 원본 50% + 반전 50% (속도 빠름, 데이터 다양성 유지)")
+        print("  2. 전체 반전 - 원본 0% + 반전 100% (반대손으로 완전 전환)")
+        flip_choice = input("선택 (1-2, 기본값: 1): ").strip() or "1"
+        
+        if flip_choice == "2":
+            flip_mode = "full"
+            print("✓ 전체 반전 모드 - 모든 이미지를 반전만 처리합니다.\n")
+        else:
+            flip_mode = "half"
+            print("✓ 절반 반전 모드 - 이미지 절반만 랜덤 선택하여 반전합니다.\n")
     else:
         use_flip = False
         print("✓ 원본 이미지만 사용합니다.\n")
@@ -95,10 +107,19 @@ def process_images(target_gestures=None, max_samples_per_gesture=None):
             
             # 랜덤 샘플링 (최대 샘플 수가 설정되어 있고, 이미지가 더 많을 경우)
             if max_samples_per_gesture and len(image_files) > max_samples_per_gesture:
-                # 반전 사용 시 절반만 샘플링 (나머지는 반전으로 채움)
-                sample_count = max_samples_per_gesture // 2 if use_flip else max_samples_per_gesture
-                image_files = random.sample(image_files, sample_count)
-                print(f"[DEBUG] 랜덤 샘플링: {len(image_files)}개 선택됨")
+                if flip_mode == "half":
+                    # 절반 반전 모드: 최대 샘플의 절반만 선택 (나머지는 반전으로 채움)
+                    sample_count = max_samples_per_gesture // 2
+                    image_files = random.sample(image_files, sample_count)
+                    print(f"[DEBUG] 랜덤 샘플링 (절반 반전): {len(image_files)}개 선택됨")
+                elif flip_mode == "full":
+                    # 전체 반전 모드: 최대 샘플 수만큼 선택 (반전만 처리, 원본은 스킵)
+                    image_files = random.sample(image_files, max_samples_per_gesture)
+                    print(f"[DEBUG] 랜덤 샘플링 (전체 반전): {len(image_files)}개 선택됨 (반전만 처리)")
+                else:
+                    # 반전 미사용: 최대 샘플 수만큼만 선택
+                    image_files = random.sample(image_files, max_samples_per_gesture)
+                    print(f"[DEBUG] 랜덤 샘플링: {len(image_files)}개 선택됨")
             
             if len(image_files) > 0:
                 print(f"[DEBUG] 첫 5개 이미지: {image_files[:5]}")
@@ -116,25 +137,31 @@ def process_images(target_gestures=None, max_samples_per_gesture=None):
                     print(f"[WARNING] 이미지를 읽을 수 없습니다: {img_name}")
                     continue
                 
-                # 원본 이미지 처리
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                results = hands.process(rgb_image)
-                
-                if results.multi_hand_landmarks:
-                    hand_landmarks = results.multi_hand_landmarks[0]
-                    landmarks = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
-                    features = normalize_landmarks(landmarks)
-                    if features is not None:
-                        collected_data.append([features, label])
-                        gesture_counts[gesture_folder] += 1
-                        if gesture_counts[gesture_folder] % 10 == 0:
-                            print(f"  → {gesture_folder}: {gesture_counts[gesture_folder]}개 수집됨...")
-                else:
-                    if gesture_counts[gesture_folder] < 3:
-                        print(f"[WARNING] 손 미검출 (원본): {img_name}")
+                # 전체 반전 모드일 경우 원본 이미지 스킵
+                if flip_mode != "full":
+                    # 원본 이미지 처리
+                    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    results = hands.process(rgb_image)
+                    
+                    if results.multi_hand_landmarks:
+                        hand_landmarks = results.multi_hand_landmarks[0]
+                        landmarks = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
+                        features = normalize_landmarks(landmarks)
+                        if features is not None:
+                            collected_data.append([features, label])
+                            gesture_counts[gesture_folder] += 1
+                            if gesture_counts[gesture_folder] % 10 == 0:
+                                print(f"  → {gesture_folder}: {gesture_counts[gesture_folder]}개 수집됨...")
+                    else:
+                        if gesture_counts[gesture_folder] < 3:
+                            print(f"[WARNING] 손 미검출 (원본): {img_name}")
                 
                 # 반전 이미지 처리
+                should_flip = False
                 if use_flip and (max_samples_per_gesture is None or gesture_counts[gesture_folder] < max_samples_per_gesture):
+                    should_flip = True
+                
+                if should_flip:
                     flipped_image = cv2.flip(image, 1)  # 좌우 반전
                     rgb_flipped = cv2.cvtColor(flipped_image, cv2.COLOR_BGR2RGB)
                     results_flipped = hands.process(rgb_flipped)
