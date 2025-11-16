@@ -55,6 +55,22 @@ game_sessions: Dict[str, dict] = {}  # {session_id: gameState}
 ai_sessions: Dict[str, dict] = {}     # {session_id: latestAIInput}
 session_tasks: Dict[str, asyncio.Task] = {}  # {session_id: game_loop_task}
 
+# --- 스킬 시스템: 사용 가능한 알파벳 ---
+AVAILABLE_GESTURES = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"]
+
+# --- 스킬 타입별 설정 (램덤 선택용) ---
+SKILL_TYPES = [
+    {"type": "fireSlash", "damage": 50, "range": 200},
+    {"type": "skyBeam", "damage": 80, "range": 200},
+    {"type": "fireVortexRed", "damage": 60, "range": 200},
+    {"type": "fireHammerRed", "damage": 100, "range": 200},
+    {"type": "lightningV1", "damage": 70, "range": 200},
+    {"type": "lightningV2", "damage": 75, "range": 200},
+    {"type": "meteorShowerRed", "damage": 90, "range": 200},
+    {"type": "fireHurricaneBlue", "damage": 85, "range": 200},
+    {"type": "tornado", "damage": 65, "range": 200},
+]
+
 
 # ==================== 게임 로직 클래스 ====================
 
@@ -85,10 +101,10 @@ WAVE_ENEMY_TIERS = {
 
 # 웨이브별 목표 점수 (해당 점수 도달 시 다음 웨이브)
 WAVE_SCORE_THRESHOLDS = {
-    1: 100,   # 100점 도달 시 웨이브 2
-    2: 250,   # 250점 도달 시 웨이브 3
-    3: 450,   # 450점 도달 시 웨이브 4
-    4: 700,   # 700점 도달 시 웨이브 5 (최종)
+    1: 80,   # 100점 도달 시 웨이브 2
+    2: 170,   # 250점 도달 시 웨이브 3
+    3: 270,   # 450점 도달 시 웨이브 4
+    4: 380,   # 700점 도달 시 웨이브 5 (최종)
     5: float('inf')  # 웨이브 5는 무한
 }
 
@@ -155,10 +171,12 @@ class Enemy:
 
 class Effect:
     """스킬 이펙트"""
-    def __init__(self, effect_id: str, effect_type: str, x: float, duration: float = 0.5):
+    def __init__(self, effect_id: str, effect_type: str, x: float, damage: int, skill_range: int = 200, duration: float = 0.5):
         self.id = effect_id
         self.type = effect_type
         self.x = x
+        self.damage = damage
+        self.range = skill_range
         self.duration = duration
         self.createdAt = time.time()
     
@@ -169,53 +187,22 @@ class Effect:
         return {
             "id": self.id,
             "type": self.type,
-            "x": self.x / 2148  # 0.0~1.0 정규화
+            "x": self.x / 2148,  # 0.0~1.0 정규화
+            "damage": self.damage
         }
 
 
 class Player:
-    """플레이어 (스킬 시전)"""
-    def __init__(self):
-        self.skill_cooldown = 1.0  # 스킬 쿨다운 (초)
-        self.skill_range = 200  # 스킬 범위 (픽셀)
-        self.skill_damage = 50
-    
-    def cast_skill(self, session_id: str, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
-        """스킬 시전"""
-        current_time = time.time()
-        gameState = game_sessions[session_id]
-        
-        # 쿨다운 체크
-        if current_time - gameState["lastSkillTime"] < self.skill_cooldown:
-            return None
-        
-        gameState["lastSkillTime"] = current_time
-        
-        # 스킬 타입과 데미지 결정 (제스처에 따라)
-        skill_config = {
-            "A": {"type": "fireSlash", "damage": 50},              # A - 불 베기 (기본)
-            "B": {"type": "skyBeam", "damage": 80},                # B - 하늘 광선 (강력)
-            "C": {"type": "fireVortexRed", "damage": 60},          # C - 불 소용돌이
-            "D": {"type": "fireHammerRed", "damage": 100},         # D - 불 망치 (최강)
-            "L": {"type": "lightningV1", "damage": 70},            # L - 번개 V1
-            "K": {"type": "lightningV2", "damage": 75},            # K - 번개 V2
-            "R": {"type": "meteorShowerRed", "damage": 90},        # R - 메테오 샤워
-            "V": {"type": "fireHurricaneBlue", "damage": 85},      # V - 불 허리케인
-            "W": {"type": "tornado", "damage": 65},                # W - 토네이도
-        }
-        
-        config = skill_config.get(gesture, {"type": "fireSlash", "damage": 50})
-        
-        # 월드 픽셀 좌표 사용 (맵 기준)
-        return {
-            "skill_type": config["type"],
-            "target_x": gaze_x,  # 맵 픽셀 (0~2148)
-            "damage": config["damage"],
-            "range": self.skill_range  # 픽셀 단위
-        }
+    """플레이어 (더 이상 사용 안함 - 프론트에서 스킬 처리)"""
+    pass
 
 
 player = Player()
+
+
+def generate_gesture_sequence(count: int = 5) -> List[str]:
+    """램덤한 알파벳 시퀀스 생성 (5개)"""
+    return [np.random.choice(AVAILABLE_GESTURES) for _ in range(count)]
 
 
 # ==================== 게임 로직 함수 ====================
@@ -251,14 +238,12 @@ def spawn_enemy(session_id: str):
     # print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
 
 
-def check_collision(session_id: str, skill_data: Dict) -> List[Enemy]:
+def check_collision(session_id: str, effect: Effect) -> List[Enemy]:
     """스킬과 적 충돌 판정 (x축만 사용, 픽셀 기준)"""
     hit_enemies = []
-    target_x = skill_data["target_x"]  # 맵 픽셀 (0~2148)
-    skill_range = skill_data["range"]  # 픽셀 단위
+    target_x = effect.x  # 맵 픽셀 (0~2148)
+    skill_range = effect.range  # 픽셀 단위
     gameState = game_sessions[session_id]
-    
-    # print(f"[Collision] 스킬 타겟 x={target_x:.1f}px, 범위={skill_range}px")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
@@ -266,8 +251,6 @@ def check_collision(session_id: str, skill_data: Dict) -> List[Enemy]:
         
         # x축 픽셀 거리 계산
         distance = abs(enemy.x - target_x)
-        
-        # print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f}px, 거리={distance:.1f}px, 타격={'O' if distance <= skill_range else 'X'}")
         
         if distance <= skill_range:
             hit_enemies.append(enemy)
@@ -347,26 +330,48 @@ async def game_loop(websocket: WebSocket, session_id: str):
                     pass
                 break
             
-            # 5. AI 입력 확인 및 스킬 시전
+            # 5. AI 입력 확인 및 제스처 매칭 체크
             gesture = latestAIInput.get("gesture", "NONE")
-            if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
-                skill_data = player.cast_skill(
-                    session_id,
-                    gesture,
-                    latestAIInput["gaze_x"],
-                    latestAIInput["gaze_y"]
-                )
-                
-                if skill_data:
-                    # 이펙트 생성
+            gesture_matched = False
+            current_time = time.time()
+            gesture_cooldown = 0.5  # 제스처 인식 쿨다운 (0.5초)
+            
+            if gesture != "NONE" and len(gameState["gestureSequence"]) > 0:
+                # 쿨다운 체크
+                if current_time - gameState["lastGestureTime"] < gesture_cooldown:
+                    pass  # 쿨다운 중이면 무시
+                # 시퀀스의 첫 번째 알파벳과 비교
+                elif gesture == gameState["gestureSequence"][0]:
+                    gesture_matched = True
+                    gameState["lastGestureTime"] = current_time  # 쿨다운 시작
+                    
+                    # 시퀀스에서 제거
+                    gameState["gestureSequence"].pop(0)
+                    # 새로운 알파벳 추가 (리스트 5개 유지)
+                    gameState["gestureSequence"].append(np.random.choice(AVAILABLE_GESTURES))
+                    
+                    # 램덤 스킬 선택
+                    skill = np.random.choice(SKILL_TYPES)
+                    
+                    # 이펙트 생성 (gaze 위치에)
                     effect_id = f"effect_{uuid.uuid4().hex[:8]}"
-                    effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
+                    effect = Effect(
+                        effect_id,
+                        skill["type"],
+                        latestAIInput["gaze_x"],  # 맵 픽셀 좌표
+                        skill["damage"],
+                        skill["range"]
+                    )
                     gameState["effects"].append(effect)
                     
-                    # 충돌 판정 (데미지만 부여, 점수는 사망 시 획듩)
-                    hit_enemies = check_collision(session_id, skill_data)
+                    # 충돌 판정 및 데미지 처리
+                    hit_enemies = check_collision(session_id, effect)
                     for enemy in hit_enemies:
-                        enemy.take_damage(skill_data["damage"])
+                        enemy.take_damage(skill["damage"])
+                    
+                    print(f"[Game] 제스처 매칭! {gesture} | 스킬: {skill['type']} (데미지: {skill['damage']}) | 새 시퀀스: {gameState['gestureSequence']} (세션: {session_id[:8]}...)")
+            # 매칭 성공 여부 저장
+            latestAIInput["gestureMatched"] = gesture_matched
             
             # 6. 만료된 이펙트 제거
             gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
@@ -386,7 +391,9 @@ async def game_loop(websocket: WebSocket, session_id: str):
                     "playerGold": gameState["playerGold"],
                     "playerScore": gameState["playerScore"],
                     "playerHP": gameState["playerHP"],
-                    "waveNumber": gameState["waveNumber"]
+                    "waveNumber": gameState["waveNumber"],
+                    "gestureSequence": gameState["gestureSequence"],  # 알파벳 시퀀스
+                    "gestureMatched": latestAIInput.get("gestureMatched", False)  # 매칭 성공 여부
                 }
             }
             
@@ -502,7 +509,9 @@ async def websocket_endpoint(websocket: WebSocket):
         "playerHP": 100,  # 플레이어 HP
         "waveNumber": 1,
         "lastSkillTime": 0.0,
-        "wave5EnemyCount": 0  # 웨이브 5 적 카운터
+        "lastGestureTime": 0.0,  # 마지막 제스처 인식 시간
+        "wave5EnemyCount": 0,  # 웨이브 5 적 카운터
+        "gestureSequence": generate_gesture_sequence(5)  # 램덤 5개 알파벳 시퀀스
     }
     
     # 세션별 AI 입력 초기화 (맵 픽셀 좌표)
@@ -511,7 +520,8 @@ async def websocket_endpoint(websocket: WebSocket):
         "gaze_x": 1074.0,  # 2148 / 2
         "gaze_y": 540.0,   # 1080 / 2
         "yaw_ratio": 0.0,
-        "pitch_ratio": 0.0
+        "pitch_ratio": 0.0,
+        "gestureMatched": False  # 제스처 매칭 여부
     }
     
     # 세션별 게임 루프 시작
@@ -575,7 +585,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 probabilities = asl_model.predict_proba(features.reshape(1, -1))[0]
                                 max_probability = max(probabilities)
                                 
-                                if max_probability >= 0.50:
+                                if max_probability >= 0.30:
                                     response_data["gesture"] = prediction
                             else:
                                 # predict_proba가 없는 모델인 경우 기본값 사용
