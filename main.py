@@ -439,8 +439,21 @@ async def websocket_endpoint(websocket: WebSocket):
                         if features is not None:
                             # 모델 예측 (features를 2D 배열로 변환: (1, 40))
                             prediction = asl_model.predict(features.reshape(1, -1))[0]
-                            response_data["gesture"] = prediction
-                            print(f"[ASL] 제스처 인식: {prediction}")
+                            
+                            # 예측 확률 확인 (90% 이상일 때만 전송)
+                            if hasattr(asl_model, 'predict_proba'):
+                                probabilities = asl_model.predict_proba(features.reshape(1, -1))[0]
+                                max_probability = max(probabilities)
+                                
+                                if max_probability >= 0.50:
+                                    response_data["gesture"] = prediction
+                                    # print(f"[ASL] 제스처 인식: {prediction} (확률: {max_probability:.2%})")
+                                # else:
+                                    # print(f"[ASL] 제스처 신뢰도 낮음: {prediction} (확률: {max_probability:.2%})")
+                            else:
+                                # predict_proba가 없는 모델인 경우 기본값 사용
+                                response_data["gesture"] = prediction
+                                # print(f"[ASL] 제스처 인식: {prediction}")
                     except Exception as e:
                         print(f"[ASL] 제스처 인식 오류: {e}") 
 
