@@ -379,7 +379,7 @@ async def game_loop(websocket: WebSocket, session_id: str):
             
             # 7. Generate Full State Sync (normalized coordinates)
             gaze_x_norm = latestAIInput["gaze_x"] / 2148
-            gaze_y_norm = latestAIInput["gaze_y"] / 1080
+            gaze_y_norm = min(latestAIInput["gaze_y"] / 1080 - 0.15, 0)
             
             state_sync = {
                 "gameState": {
