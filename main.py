@@ -50,26 +50,10 @@ except Exception as e:
     print(f"✗ 모델 로드 실패: {e}")
     asl_model = None
 
-# --- 전역 변수: 최신 AI 입력 데이터 ---
-latestAIInput = {
-    "gesture": "NONE",
-    "gaze_x": 0.5,  # 0.0 (왼쪽) ~ 1.0 (오른쪽)
-    "gaze_y": 0.5,  # 0.0 (위) ~ 1.0 (아래)
-    "yaw_ratio": 0.0,  # -1.0 (왼쪽) ~ +1.0 (오른쪽)
-    "pitch_ratio": 0.0  # -1.0 (위) ~ +1.0 (아래)
-}
-
-# --- 게임 상태 전역 변수 ---
-connected_clients: Set[WebSocket] = set()
-gameState = {
-    "enemies": [],
-    "effects": [],
-    "playerGold": 0,
-    "playerScore": 0,
-    "waveNumber": 1,
-    "lastSkillTime": 0.0,
-    "waveStartTime": 0.0  # 웨이브 시작 시간
-}
+# --- 세션 기반 저장소 (각 유저마다 독립적인 게임 상태) ---
+game_sessions: Dict[str, dict] = {}  # {session_id: gameState}
+ai_sessions: Dict[str, dict] = {}     # {session_id: latestAIInput}
+session_tasks: Dict[str, asyncio.Task] = {}  # {session_id: game_loop_task}
 
 
 # ==================== 게임 로직 클래스 ====================
@@ -186,9 +170,10 @@ class Player:
         self.skill_range = 0.15  # 스킬 범위 (정규화, 0.0~1.0)
         self.skill_damage = 50
     
-    def cast_skill(self, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
+    def cast_skill(self, session_id: str, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
         """스킬 시전"""
         current_time = time.time()
+        gameState = game_sessions[session_id]
         
         # 쿨다운 체크
         if current_time - gameState["lastSkillTime"] < self.skill_cooldown:
@@ -226,9 +211,10 @@ player = Player()
 
 # ==================== 게임 로직 함수 ====================
 
-def spawn_enemy():
+def spawn_enemy(session_id: str):
     """웨이브에 따라 적 생성"""
     enemy_id = f"enemy_{uuid.uuid4().hex[:8]}"
+    gameState = game_sessions[session_id]
     current_wave = gameState["waveNumber"]
     
     # 웨이브별 적군 선택 (낮은 티어도 계속 등장)
@@ -263,13 +249,14 @@ def spawn_enemy():
     # print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
 
 
-def check_collision(skill_data: Dict) -> List[Enemy]:
+def check_collision(session_id: str, skill_data: Dict) -> List[Enemy]:
     """스킬과 적 충돌 판정 (x축만 사용)"""
     hit_enemies = []
     target_x = skill_data["target_x"]  # 0.0~1.0
     skill_range = skill_data["range"]  # 0.0~1.0
+    gameState = game_sessions[session_id]
     
-    # print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
+    print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
@@ -291,96 +278,99 @@ def check_collision(skill_data: Dict) -> List[Enemy]:
 
 # ==================== 게임 루프 (20fps) ====================
 
-async def game_loop():
+async def game_loop(websocket: WebSocket, session_id: str):
     """
-    README 설계대로 asyncio 기반 게임 루프
+    세션별 게임 루프
     - 20fps (0.05초마다 실행)
-    - latestAIInput을 읽어서 게임 로직 처리
-    - Full State Sync JSON을 모든 클라이언트에게 브로드캐스트
+    - 해당 세션의 AI 입력을 읽어서 게임 로직 처리
+    - 해당 세션의 클라이언트에게만 브로드캐스트
     """
-    print("[Game] 게임 루프 시작 (20fps)")
+    print(f"[Game] 게임 루프 시작 (세션: {session_id[:8]}...)")
+    
+    gameState = game_sessions[session_id]
+    latestAIInput = ai_sessions[session_id]
     
     last_spawn_time = time.time()
     spawn_interval = 3.0  # 3초마다 적 생성
     gameState["waveStartTime"] = time.time()  # 웨이브 시작 시간 기록
     
-    while True:
-        loop_start = time.time()
-        delta_time = 0.05  # 20fps
-        
-        # 0. 웨이브 진행 체크 (10초마다 웨이브 증가)
-        wave_elapsed = time.time() - gameState["waveStartTime"]
-        if wave_elapsed >= 10.0:
-            gameState["waveNumber"] += 1
-            gameState["waveStartTime"] = time.time()
-            print(f"[Game] 웨이브 {gameState['waveNumber']} 시작!")
-        
-        # 1. 적 스포너
-        if time.time() - last_spawn_time > spawn_interval:
-            spawn_enemy()
-            last_spawn_time = time.time()
-        
-        # 2. 적 업데이트 (이동)
-        for enemy in gameState["enemies"]:
-            enemy.update(delta_time)
-        
-        # 3. 죽은 적 제거
-        gameState["enemies"] = [e for e in gameState["enemies"] if not e.isDead or time.time() - gameState["lastSkillTime"] < 1.0]
-        
-        # 4. AI 입력 확인 및 스킬 시전
-        gesture = latestAIInput.get("gesture", "NONE")
-        if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
-            skill_data = player.cast_skill(
-                gesture,
-                latestAIInput["gaze_x"],
-                latestAIInput["gaze_y"]
-            )
+    try:
+        while True:
+            loop_start = time.time()
+            delta_time = 0.05  # 20fps
             
-            if skill_data:
-                # 이펙트 생성
-                effect_id = f"effect_{uuid.uuid4().hex[:8]}"
-                effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
-                gameState["effects"].append(effect)
+            # 0. 웨이브 진행 체크 (10초마다 웨이브 증가)
+            wave_elapsed = time.time() - gameState["waveStartTime"]
+            if wave_elapsed >= 10.0:
+                gameState["waveNumber"] += 1
+                gameState["waveStartTime"] = time.time()
+                print(f"[Game] 웨이브 {gameState['waveNumber']} 시작! (세션: {session_id[:8]}...)")
+            
+            # 1. 적 스포너
+            if time.time() - last_spawn_time > spawn_interval:
+                spawn_enemy(session_id)
+                last_spawn_time = time.time()
+            
+            # 2. 적 업데이트 (이동)
+            for enemy in gameState["enemies"]:
+                enemy.update(delta_time)
+            
+            # 3. 죽은 적 제거
+            gameState["enemies"] = [e for e in gameState["enemies"] if not e.isDead or time.time() - gameState["lastSkillTime"] < 1.0]
+            
+            # 4. AI 입력 확인 및 스킬 시전
+            gesture = latestAIInput.get("gesture", "NONE")
+            if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
+                skill_data = player.cast_skill(
+                    session_id,
+                    gesture,
+                    latestAIInput["gaze_x"],
+                    latestAIInput["gaze_y"]
+                )
                 
-                # 충돌 판정
-                hit_enemies = check_collision(skill_data)
-                for enemy in hit_enemies:
-                    enemy.take_damage(skill_data["damage"])
-                    gameState["playerScore"] += 10
-                    # print(f"[Game] 적 {enemy.id} 타격! HP: {enemy.currentHP}/{enemy.maxHP}")
-        
-        # 5. 만료된 이펙트 제거
-        gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
-        
-        # 6. Full State Sync 생성
-        state_sync = {
-            "gameState": {
-                "enemies": [e.to_dict() for e in gameState["enemies"]],
-                "effects": [e.to_dict() for e in gameState["effects"]],
-                "gazePosition": {
-                    "x": latestAIInput["gaze_x"],
-                    "y": latestAIInput["gaze_y"]
-                },
-                "playerGold": gameState["playerGold"],
-                "playerScore": gameState["playerScore"],
-                "waveNumber": gameState["waveNumber"]
+                if skill_data:
+                    # 이펙트 생성
+                    effect_id = f"effect_{uuid.uuid4().hex[:8]}"
+                    effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
+                    gameState["effects"].append(effect)
+                    
+                    # 충돌 판정
+                    hit_enemies = check_collision(session_id, skill_data)
+                    for enemy in hit_enemies:
+                        enemy.take_damage(skill_data["damage"])
+                        gameState["playerScore"] += 10
+            
+            # 5. 만료된 이펙트 제거
+            gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
+            
+            # 6. Full State Sync 생성
+            state_sync = {
+                "gameState": {
+                    "enemies": [e.to_dict() for e in gameState["enemies"]],
+                    "effects": [e.to_dict() for e in gameState["effects"]],
+                    "gazePosition": {
+                        "x": latestAIInput["gaze_x"],
+                        "y": latestAIInput["gaze_y"]
+                    },
+                    "playerGold": gameState["playerGold"],
+                    "playerScore": gameState["playerScore"],
+                    "waveNumber": gameState["waveNumber"]
+                }
             }
-        }
-        
-        # 7. 모든 연결된 클라이언트에게 브로드캐스트
-        disconnected = set()
-        for client in connected_clients:
+            
+            # 7. 해당 세션 클라이언트에게만 전송
             try:
-                await client.send_json(state_sync)
+                await websocket.send_json(state_sync)
             except:
-                disconnected.add(client)
-        
-        # 연결 끊긴 클라이언트 제거
-        connected_clients.difference_update(disconnected)
-        
-        # 8. 20fps 유지
-        elapsed = time.time() - loop_start
-        sleep_time = max(0, delta_time - elapsed)
+                print(f"[Game] 세션 {session_id[:8]}... 연결 끊김")
+                break
+            
+            # 8. 20fps 유지
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, delta_time - elapsed)
+            await asyncio.sleep(sleep_time)
+    except asyncio.CancelledError:
+        print(f"[Game] 세션 {session_id[:8]}... 게임 루프 종료")
         await asyncio.sleep(sleep_time)
 
 
@@ -463,10 +453,38 @@ def calculate_gaze(face_key_points: dict) -> dict:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    connected_clients.add(websocket)
-    print(f"클라이언트 연결됨. (총 {len(connected_clients)}명)")
+    
+    # 세션 ID 생성 및 초기화
+    session_id = str(uuid.uuid4())
+    print(f"[Session] 클라이언트 연결됨 (세션: {session_id[:8]}...)")
+    
+    # 세션별 게임 상태 초기화
+    game_sessions[session_id] = {
+        "enemies": [],
+        "effects": [],
+        "playerGold": 0,
+        "playerScore": 0,
+        "waveNumber": 1,
+        "lastSkillTime": 0.0,
+        "waveStartTime": 0.0
+    }
+    
+    # 세션별 AI 입력 초기화
+    ai_sessions[session_id] = {
+        "gesture": "NONE",
+        "gaze_x": 0.5,
+        "gaze_y": 0.5,
+        "yaw_ratio": 0.0,
+        "pitch_ratio": 0.0
+    }
+    
+    # 세션별 게임 루프 시작
+    game_task = asyncio.create_task(game_loop(websocket, session_id))
+    session_tasks[session_id] = game_task
 
     try:
+        latestAIInput = ai_sessions[session_id]  # 세션별 AI 입력 참조
+        
         while True:
             # 1. 클라이언트(JS)로부터 Base64 이미지(텍스트) 수신
             data = await websocket.receive_text()
@@ -523,19 +541,13 @@ async def websocket_endpoint(websocket: WebSocket):
                                 
                                 if max_probability >= 0.50:
                                     response_data["gesture"] = prediction
-                                    # print(f"[ASL] 제스처 인식: {prediction} (확률: {max_probability:.2%})")
-                                # else:
-                                    # print(f"[ASL] 제스처 신뢰도 낮음: {prediction} (확률: {max_probability:.2%})")
                             else:
                                 # predict_proba가 없는 모델인 경우 기본값 사용
                                 response_data["gesture"] = prediction
-                                # print(f"[ASL] 제스처 인식: {prediction}")
                     except Exception as e:
                         print(f"[ASL] 제스처 인식 오류: {e}") 
 
-            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-            # ★ 변경: 얼굴 주요 포인트 추출 + Gaze 계산 (내부용만)
-            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+            # 얼굴 주요 포인트 추출 + Gaze 계산
             if results_face.multi_face_landmarks:
                 landmarks = results_face.multi_face_landmarks[0].landmark
                 
@@ -554,29 +566,33 @@ async def websocket_endpoint(websocket: WebSocket):
                 gaze_data = calculate_gaze(face_key_points)
                 response_data["gaze"] = gaze_data
                 
-                # latestAIInput 전역 변수 업데이트
+                # 세션별 AI 입력 업데이트
                 latestAIInput["gaze_x"] = gaze_data["gaze_x"]
                 latestAIInput["gaze_y"] = gaze_data["gaze_y"]
                 latestAIInput["yaw_ratio"] = gaze_data["yaw_ratio"]
                 latestAIInput["pitch_ratio"] = gaze_data["pitch_ratio"]
                 latestAIInput["gesture"] = response_data["gesture"]
-                
-                # print(f"[Gaze] x={gaze_data['gaze_x']:.2f}, y={gaze_data['gaze_y']:.2f}, yaw={gaze_data['yaw_ratio']:.2f}, pitch={gaze_data['pitch_ratio']:.2f}")
 
             # 4. 분석 결과를 클라이언트(JS)로 전송
             await websocket.send_json(response_data)
 
     except Exception as e:
-        print(f"연결 끊김 또는 오류: {e}")
+        print(f"[Session] 연결 끊김 또는 오류 (세션: {session_id[:8]}...): {e}")
     finally:
-        connected_clients.discard(websocket)
-        print(f"클라이언트 연결 종료. (남은 클라이언트: {len(connected_clients)}명)")
+        # 세션 정리
+        game_task.cancel()
+        if session_id in game_sessions:
+            del game_sessions[session_id]
+        if session_id in ai_sessions:
+            del ai_sessions[session_id]
+        if session_id in session_tasks:
+            del session_tasks[session_id]
+        print(f"[Session] 클라이언트 연결 종료 (세션: {session_id[:8]}...)")
 
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 게임 루프 시작"""
-    asyncio.create_task(game_loop())
-    print("✓ 서버 시작 완료! 게임 루프 실행 중...")
+    """서버 시작 완료"""
+    print("✓ 서버 시작 완료! 세션 기반 게임 실행 중...")
 
 
 # 서버 실행 (이 파일이 직접 실행될 때만)
