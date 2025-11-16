@@ -133,7 +133,7 @@ class Enemy:
         return {
             "id": self.id,
             "typeId": self.typeId,
-            "x": self.x / 1920,  # 0.0~1.0 정규화
+            "x": self.x / 2148,  # 0.0~1.0 정규화
             "y": self.y / 1080,  # 0.0~1.0 정규화
             "currentHP": self.currentHP,
             "maxHP": self.maxHP,
@@ -159,7 +159,7 @@ class Effect:
         return {
             "id": self.id,
             "type": self.type,
-            "x": self.x
+            "x": self.x / 2148  # 0.0~1.0 정규화
         }
 
 
@@ -167,7 +167,7 @@ class Player:
     """플레이어 (스킬 시전)"""
     def __init__(self):
         self.skill_cooldown = 1.0  # 스킬 쿨다운 (초)
-        self.skill_range = 0.15  # 스킬 범위 (정규화, 0.0~1.0)
+        self.skill_range = 200  # 스킬 범위 (픽셀)
         self.skill_damage = 50
     
     def cast_skill(self, session_id: str, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
@@ -196,13 +196,12 @@ class Player:
         
         config = skill_config.get(gesture, {"type": "fireSlash", "damage": 50})
         
-        # x축만 사용 (0.0~1.0)
-        # 프론트엔드에서 화면 크기에 맞게 스케일링
+        # 월드 픽셀 좌표 사용 (맵 기준)
         return {
             "skill_type": config["type"],
-            "target_x": gaze_x,
+            "target_x": gaze_x,  # 맵 픽셀 (0~2148)
             "damage": config["damage"],
-            "range": self.skill_range
+            "range": self.skill_range  # 픽셀 단위
         }
 
 
@@ -237,8 +236,8 @@ def spawn_enemy(session_id: str):
     
     type_id = np.random.choice(enemy_pool)
     
-    # 오른쪽 스폰
-    x = 1800 
+    # 오른쪽 스폰 (맵 width 2148 픽셀 기준)
+    x = 2000
     # y축: 화면 하단 50~70% (1080 기준 540~756)
     y = 648 + np.random.randint(0, 217)  # 540 + [0~216]
     
@@ -250,25 +249,22 @@ def spawn_enemy(session_id: str):
 
 
 def check_collision(session_id: str, skill_data: Dict) -> List[Enemy]:
-    """스킬과 적 충돌 판정 (x축만 사용)"""
+    """스킬과 적 충돌 판정 (x축만 사용, 픽셀 기준)"""
     hit_enemies = []
-    target_x = skill_data["target_x"]  # 0.0~1.0
-    skill_range = skill_data["range"]  # 0.0~1.0
+    target_x = skill_data["target_x"]  # 맵 픽셀 (0~2148)
+    skill_range = skill_data["range"]  # 픽셀 단위
     gameState = game_sessions[session_id]
     
-    print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
+    # print(f"[Collision] 스킬 타겟 x={target_x:.1f}px, 범위={skill_range}px")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
             continue
         
-        # 적 x좌표를 정규화 (1920 기준)
-        enemy_x_norm = enemy.x / 1920
+        # x축 픽셀 거리 계산
+        distance = abs(enemy.x - target_x)
         
-        # x축 거리만 계산
-        distance = abs(enemy_x_norm - target_x)
-        
-        # print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f} (정규화={enemy_x_norm:.3f}), 거리={distance:.3f}, 타격={'O' if distance <= skill_range else 'X'}")
+        # print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f}px, 거리={distance:.1f}px, 타격={'O' if distance <= skill_range else 'X'}")
         
         if distance <= skill_range:
             hit_enemies.append(enemy)
@@ -343,20 +339,34 @@ async def game_loop(websocket: WebSocket, session_id: str):
             # 5. 만료된 이펙트 제거
             gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
             
-            # 6. Full State Sync 생성
+            # 6. Full State Sync 생성 (정규화된 좌표)
+            gaze_x_norm = latestAIInput["gaze_x"] / 2148
+            gaze_y_norm = latestAIInput["gaze_y"] / 1080
+            
             state_sync = {
                 "gameState": {
                     "enemies": [e.to_dict() for e in gameState["enemies"]],
                     "effects": [e.to_dict() for e in gameState["effects"]],
                     "gazePosition": {
-                        "x": latestAIInput["gaze_x"],
-                        "y": latestAIInput["gaze_y"]
+                        "x": gaze_x_norm,  # 0.0~1.0 정규화
+                        "y": gaze_y_norm   # 0.0~1.0 정규화
                     },
                     "playerGold": gameState["playerGold"],
                     "playerScore": gameState["playerScore"],
                     "waveNumber": gameState["waveNumber"]
                 }
             }
+            
+            # # 좌표 로깅
+            # if gameState["enemies"]:
+            #     first_enemy = gameState["enemies"][0]
+            #     enemy_dict = first_enemy.to_dict()
+            #     print(f"[Sync] Gaze: ({gaze_x_norm:.3f}, {gaze_y_norm:.3f}) | Enemy[0]: ({enemy_dict['x']:.3f}, {enemy_dict['y']:.3f})")
+            
+            # if gameState["effects"]:
+            #     first_effect = gameState["effects"][0]
+            #     effect_dict = first_effect.to_dict()
+            #     print(f"[Sync] Effect[0]: x={effect_dict['x']:.3f}")
             
             # 7. 해당 세션 클라이언트에게만 전송
             try:
@@ -380,18 +390,18 @@ def calculate_gaze(face_key_points: dict) -> dict:
     
     Returns:
         dict: {
-            "gaze_x": 0.0~1.0,
-            "gaze_y": 0.0~1.0,
+            "gaze_x": 맵 픽셀 (0~2148),
+            "gaze_y": 맵 픽셀 (0~1080),
             "yaw_ratio": -1.0~1.0,
             "pitch_ratio": -1.0~1.0
         }
     """
     data = face_key_points
     
-    # 기본값
+    # 기본값 (맵 중앙)
     result = {
-        "gaze_x": 0.5,
-        "gaze_y": 0.5,
+        "gaze_x": 1074.0,  # 2148 / 2
+        "gaze_y": 540.0,   # 1080 / 2
         "yaw_ratio": 0.0,
         "pitch_ratio": 0.0
     }
@@ -435,15 +445,19 @@ def calculate_gaze(face_key_points: dict) -> dict:
     gaze_scale_x = 1.5
     gaze_scale_y = 6.0
     
-    gaze_x = face_center_x - yaw_ratio * gaze_scale_x
-    gaze_y = face_center_y - pitch_ratio * gaze_scale_y
+    gaze_x_norm = face_center_x - yaw_ratio * gaze_scale_x
+    gaze_y_norm = face_center_y - pitch_ratio * gaze_scale_y
     
     # 0.0 ~ 1.0 범위로 클램핑
-    gaze_x = max(0.0, min(1.0, gaze_x))
-    gaze_y = max(0.0, min(1.0, gaze_y))
+    gaze_x_norm = max(0.0, min(1.0, gaze_x_norm))
+    gaze_y_norm = max(0.0, min(1.0, gaze_y_norm))
     
-    result["gaze_x"] = gaze_x
-    result["gaze_y"] = gaze_y
+    # 맵 픽셀 좌표로 변환 (2148x1080)
+    gaze_x_px = gaze_x_norm * 2148
+    gaze_y_px = gaze_y_norm * 1080
+    
+    result["gaze_x"] = gaze_x_px
+    result["gaze_y"] = gaze_y_px
     result["yaw_ratio"] = yaw_ratio
     result["pitch_ratio"] = pitch_ratio
     
@@ -469,11 +483,11 @@ async def websocket_endpoint(websocket: WebSocket):
         "waveStartTime": 0.0
     }
     
-    # 세션별 AI 입력 초기화
+    # 세션별 AI 입력 초기화 (맵 픽셀 좌표)
     ai_sessions[session_id] = {
         "gesture": "NONE",
-        "gaze_x": 0.5,
-        "gaze_y": 0.5,
+        "gaze_x": 1074.0,  # 2148 / 2
+        "gaze_y": 540.0,   # 1080 / 2
         "yaw_ratio": 0.0,
         "pitch_ratio": 0.0
     }
@@ -564,9 +578,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Gaze 계산
                 gaze_data = calculate_gaze(face_key_points)
-                response_data["gaze"] = gaze_data
                 
-                # 세션별 AI 입력 업데이트
+                # 프론트엔드로 정규화된 값 전송
+                response_data["gaze"] = {
+                    "gaze_x": gaze_data["gaze_x"] / 2148,  # 0.0~1.0 정규화
+                    "gaze_y": gaze_data["gaze_y"] / 1080,  # 0.0~1.0 정규화
+                    "yaw_ratio": gaze_data["yaw_ratio"],
+                    "pitch_ratio": gaze_data["pitch_ratio"]
+                }
+                
+                # 세션별 AI 입력 업데이트 (픽셀 값으로 저장)
                 latestAIInput["gaze_x"] = gaze_data["gaze_x"]
                 latestAIInput["gaze_y"] = gaze_data["gaze_y"]
                 latestAIInput["yaw_ratio"] = gaze_data["yaw_ratio"]
