@@ -1,5 +1,7 @@
 # Last Vigil Backend
 
+**Frontend Repository**: [lastvigil-front](https://github.com/aaronshin43/lastvigil-front)
+
 A real-time ASL gesture recognition game backend using FastAPI WebSocket, MediaPipe, and machine learning models. The system processes webcam input to detect ASL alphabet gestures and gaze direction for controlling a 2D defense game.
 
 ## Features
