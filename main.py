@@ -67,7 +67,8 @@ gameState = {
     "playerGold": 0,
     "playerScore": 0,
     "waveNumber": 1,
-    "lastSkillTime": 0.0
+    "lastSkillTime": 0.0,
+    "waveStartTime": 0.0  # 웨이브 시작 시간
 }
 
 
@@ -117,12 +118,20 @@ class Enemy:
         self.currentFrame = 0
         self.isDead = False
         self.direction = -1 if x > 500 else 1  # 오른쪽에서 시작하면 왼쪽으로
+        self.hurtFrameCount = 0  # hurt 애니메이션 지속 프레임
     
     def update(self, delta_time: float):
         """적 이동 업데이트"""
         if not self.isDead:
             self.x += self.direction * self.speed * delta_time
             self.currentFrame = (self.currentFrame + 1) % 8
+            
+            # hurt 상태는 8프레임만 유지
+            if self.animationState == "hurt":
+                self.hurtFrameCount += 1
+                if self.hurtFrameCount >= 8:
+                    self.animationState = "walk"
+                    self.hurtFrameCount = 0
     
     def take_damage(self, damage: int):
         """데미지 입기"""
@@ -131,6 +140,9 @@ class Enemy:
             self.currentHP = 0
             self.isDead = True
             self.animationState = "death"
+        else:
+            self.animationState = "hurt"
+            self.hurtFrameCount = 0  # hurt 카운터 리셋
     
     def to_dict(self) -> dict:
         """JSON 직렬화 (정규화된 좌표로 전송)"""
@@ -184,23 +196,27 @@ class Player:
         
         gameState["lastSkillTime"] = current_time
         
-        # 스킬 타입 결정 (제스처에 따라)
-        skill_types = {
-            "A": "fireSlash",           # A - 불 베기
-            "C": "fireVortexRed",       # C - 붉은 화염 소용돌이
-            "L": "lightningV1",         # L - 번개
-            "S": "skyBeam",             # S - 하늘 광선
-            "T": "tornado",             # T - 토네이도 (추가)
-            "M": "meteorShowerRed"      # M - 운석 샤워 (추가)
+        # 스킬 타입과 데미지 결정 (제스처에 따라)
+        skill_config = {
+            "A": {"type": "fireSlash", "damage": 50},              # A - 불 베기 (기본)
+            "B": {"type": "skyBeam", "damage": 80},                # B - 하늘 광선 (강력)
+            "C": {"type": "fireVortexRed", "damage": 60},          # C - 불 소용돌이
+            "D": {"type": "fireHammerRed", "damage": 100},         # D - 불 망치 (최강)
+            "L": {"type": "lightningV1", "damage": 70},            # L - 번개 V1
+            "K": {"type": "lightningV2", "damage": 75},            # K - 번개 V2
+            "R": {"type": "meteorShowerRed", "damage": 90},        # R - 메테오 샤워
+            "V": {"type": "fireHurricaneBlue", "damage": 85},      # V - 불 허리케인
+            "W": {"type": "tornado", "damage": 65},                # W - 토네이도
         }
-        skill_type = skill_types.get(gesture, "fireSlash")
+        
+        config = skill_config.get(gesture, {"type": "fireSlash", "damage": 50})
         
         # x축만 사용 (0.0~1.0)
         # 프론트엔드에서 화면 크기에 맞게 스케일링
         return {
-            "skill_type": skill_type,
+            "skill_type": config["type"],
             "target_x": gaze_x,
-            "damage": self.skill_damage,
+            "damage": config["damage"],
             "range": self.skill_range
         }
 
@@ -215,12 +231,23 @@ def spawn_enemy():
     enemy_id = f"enemy_{uuid.uuid4().hex[:8]}"
     current_wave = gameState["waveNumber"]
     
-    # 웨이브별 적군 선택
+    # 웨이브별 적군 선택 (낮은 티어도 계속 등장)
     if current_wave <= 5:
         enemy_pool = WAVE_ENEMY_TIERS.get(current_wave, ["skeleton", "orc"])
     else:
-        # 6웨이브 이상: Tier 2 + Tier 3 혼합
-        enemy_pool = ["armoredSkeleton", "greatswordSkeleton", "armoredOrc", "elitOrc", "orcRider"]
+        # 6웨이브 이상: 모든 티어 혼합 (낮은 티어 확률 낮춤)
+        tier1 = ["slime", "skeleton", "orc"]
+        tier2 = ["skeletonArcher", "armoredSkeleton", "greatswordSkeleton"]
+        tier3 = ["armoredOrc", "elitOrc", "orcRider"]
+        
+        # Tier 1: 20%, Tier 2: 40%, Tier 3: 40%
+        tier_choice = np.random.random()
+        if tier_choice < 0.2:
+            enemy_pool = tier1
+        elif tier_choice < 0.6:
+            enemy_pool = tier2
+        else:
+            enemy_pool = tier3
     
     type_id = np.random.choice(enemy_pool)
     
@@ -275,10 +302,18 @@ async def game_loop():
     
     last_spawn_time = time.time()
     spawn_interval = 3.0  # 3초마다 적 생성
+    gameState["waveStartTime"] = time.time()  # 웨이브 시작 시간 기록
     
     while True:
         loop_start = time.time()
         delta_time = 0.05  # 20fps
+        
+        # 0. 웨이브 진행 체크 (10초마다 웨이브 증가)
+        wave_elapsed = time.time() - gameState["waveStartTime"]
+        if wave_elapsed >= 10.0:
+            gameState["waveNumber"] += 1
+            gameState["waveStartTime"] = time.time()
+            print(f"[Game] 웨이브 {gameState['waveNumber']} 시작!")
         
         # 1. 적 스포너
         if time.time() - last_spawn_time > spawn_interval:
@@ -294,7 +329,7 @@ async def game_loop():
         
         # 4. AI 입력 확인 및 스킬 시전
         gesture = latestAIInput.get("gesture", "NONE")
-        if gesture != "NONE" and gesture in ["A", "C", "L", "S", "T", "M"]:
+        if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
             skill_data = player.cast_skill(
                 gesture,
                 latestAIInput["gaze_x"],
