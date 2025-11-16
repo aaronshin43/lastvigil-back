@@ -260,7 +260,7 @@ def spawn_enemy():
     gameState["enemies"].append(enemy)
     
     config = ENEMY_CONFIG.get(type_id, {})
-    print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
+    # print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
 
 
 def check_collision(skill_data: Dict) -> List[Enemy]:
@@ -269,7 +269,7 @@ def check_collision(skill_data: Dict) -> List[Enemy]:
     target_x = skill_data["target_x"]  # 0.0~1.0
     skill_range = skill_data["range"]  # 0.0~1.0
     
-    print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
+    # print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
@@ -281,7 +281,7 @@ def check_collision(skill_data: Dict) -> List[Enemy]:
         # x축 거리만 계산
         distance = abs(enemy_x_norm - target_x)
         
-        print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f} (정규화={enemy_x_norm:.3f}), 거리={distance:.3f}, 타격={'O' if distance <= skill_range else 'X'}")
+        # print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f} (정규화={enemy_x_norm:.3f}), 거리={distance:.3f}, 타격={'O' if distance <= skill_range else 'X'}")
         
         if distance <= skill_range:
             hit_enemies.append(enemy)
@@ -347,7 +347,7 @@ async def game_loop():
                 for enemy in hit_enemies:
                     enemy.take_damage(skill_data["damage"])
                     gameState["playerScore"] += 10
-                    print(f"[Game] 적 {enemy.id} 타격! HP: {enemy.currentHP}/{enemy.maxHP}")
+                    # print(f"[Game] 적 {enemy.id} 타격! HP: {enemy.currentHP}/{enemy.maxHP}")
         
         # 5. 만료된 이펙트 제거
         gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
@@ -561,7 +561,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 latestAIInput["pitch_ratio"] = gaze_data["pitch_ratio"]
                 latestAIInput["gesture"] = response_data["gesture"]
                 
-                print(f"[Gaze] x={gaze_data['gaze_x']:.2f}, y={gaze_data['gaze_y']:.2f}, yaw={gaze_data['yaw_ratio']:.2f}, pitch={gaze_data['pitch_ratio']:.2f}")
+                # print(f"[Gaze] x={gaze_data['gaze_x']:.2f}, y={gaze_data['gaze_y']:.2f}, yaw={gaze_data['yaw_ratio']:.2f}, pitch={gaze_data['pitch_ratio']:.2f}")
 
             # 4. 분석 결과를 클라이언트(JS)로 전송
             await websocket.send_json(response_data)
