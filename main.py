@@ -73,19 +73,49 @@ gameState = {
 
 # ==================== 게임 로직 클래스 ====================
 
+# 적군 정보 (HP, 속도)
+ENEMY_CONFIG = {
+    # Tier 1: 기본 몬스터
+    "slime": {"hp": 50, "speed": 40},
+    "skeleton": {"hp": 80, "speed": 50},
+    "orc": {"hp": 100, "speed": 45},
+    # Tier 2: 중급 몬스터
+    "skeletonArcher": {"hp": 120, "speed": 55},
+    "armoredSkeleton": {"hp": 150, "speed": 40},
+    "greatswordSkeleton": {"hp": 180, "speed": 35},
+    # Tier 3: 고급 몬스터
+    "armoredOrc": {"hp": 250, "speed": 50},
+    "elitOrc": {"hp": 300, "speed": 55},
+    "orcRider": {"hp": 350, "speed": 60},
+}
+
+# 웨이브별 적군 티어
+WAVE_ENEMY_TIERS = {
+    1: ["slime", "skeleton"],
+    2: ["slime", "skeleton", "orc"],
+    3: ["skeleton", "orc", "skeletonArcher"],
+    4: ["orc", "skeletonArcher", "armoredSkeleton"],
+    5: ["skeletonArcher", "armoredSkeleton", "greatswordSkeleton"],
+    # 6웨이브 이상부터 Tier 3 등장
+}
+
 class Enemy:
     """적 엔티티"""
-    def __init__(self, enemy_id: str, type_id: str, x: float, y: float, speed: float = 50.0):
+    def __init__(self, enemy_id: str, type_id: str, x: float, y: float):
         self.id = enemy_id
         self.typeId = type_id
         self.x = x
         self.y = y
-        self.currentHP = 100
-        self.maxHP = 100
+        
+        # 적 타입에 따른 HP와 속도 설정
+        config = ENEMY_CONFIG.get(type_id, {"hp": 100, "speed": 50})
+        self.maxHP = config["hp"]
+        self.currentHP = self.maxHP
+        self.speed = config["speed"]  # pixels per second
+        
         self.animationState = "walk"
         self.currentFrame = 0
         self.isDead = False
-        self.speed = speed  # pixels per second
         self.direction = -1 if x > 500 else 1  # 오른쪽에서 시작하면 왼쪽으로
     
     def update(self, delta_time: float):
@@ -181,10 +211,18 @@ player = Player()
 # ==================== 게임 로직 함수 ====================
 
 def spawn_enemy():
-    """적 생성"""
+    """웨이브에 따라 적 생성"""
     enemy_id = f"enemy_{uuid.uuid4().hex[:8]}"
-    enemy_types = ["skeleton", "orc", "slime", "skeletonArcher"]
-    type_id = enemy_types[len(gameState["enemies"]) % len(enemy_types)]
+    current_wave = gameState["waveNumber"]
+    
+    # 웨이브별 적군 선택
+    if current_wave <= 5:
+        enemy_pool = WAVE_ENEMY_TIERS.get(current_wave, ["skeleton", "orc"])
+    else:
+        # 6웨이브 이상: Tier 2 + Tier 3 혼합
+        enemy_pool = ["armoredSkeleton", "greatswordSkeleton", "armoredOrc", "elitOrc", "orcRider"]
+    
+    type_id = np.random.choice(enemy_pool)
     
     # 오른쪽 스폰
     x = 1800 
@@ -193,7 +231,9 @@ def spawn_enemy():
     
     enemy = Enemy(enemy_id, type_id, x, y)
     gameState["enemies"].append(enemy)
-    print(f"[Game] 적 생성: {enemy_id} ({type_id}) at ({x}, {y})")
+    
+    config = ENEMY_CONFIG.get(type_id, {})
+    print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
 
 
 def check_collision(skill_data: Dict) -> List[Enemy]:
