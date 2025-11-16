@@ -52,11 +52,17 @@ except Exception as e:
 
 # --- 세션 기반 저장소 (각 유저마다 독립적인 게임 상태) ---
 game_sessions: Dict[str, dict] = {}  # {session_id: gameState}
-ai_sessions: Dict[str, dict] = {}     # {session_id: latestAIInput}
+ai_sessions: Dict[str, dict] = {}     # {session_id: latestAIInput}````
 session_tasks: Dict[str, asyncio.Task] = {}  # {session_id: game_loop_task}
 
 
 # ==================== 게임 로직 클래스 ====================
+
+# 월드 크기 설정 (픽셀)
+WORLD_WIDTH = 1950   # 맵 전체 너비
+WORLD_HEIGHT = 544  # 맵 전체 높이
+SCREEN_WIDTH = 1920  # 화면 너비
+SCREEN_HEIGHT = 1080 # 화면 높이
 
 # 적군 정보 (HP, 속도)
 ENEMY_CONFIG = {
@@ -86,11 +92,11 @@ WAVE_ENEMY_TIERS = {
 
 class Enemy:
     """적 엔티티"""
-    def __init__(self, enemy_id: str, type_id: str, x: float, y: float):
+    def __init__(self, enemy_id: str, type_id: str, world_x: float, world_y: float):
         self.id = enemy_id
         self.typeId = type_id
-        self.x = x
-        self.y = y
+        self.worldX = world_x
+        self.worldY = world_y
         
         # 적 타입에 따른 HP와 속도 설정
         config = ENEMY_CONFIG.get(type_id, {"hp": 100, "speed": 50})
@@ -101,13 +107,13 @@ class Enemy:
         self.animationState = "walk"
         self.currentFrame = 0
         self.isDead = False
-        self.direction = -1 if x > 500 else 1  # 오른쪽에서 시작하면 왼쪽으로
+        self.direction = -1  # 항상 왼쪽으로 이동 (월드 좌표에서는 카메라가 이동)
         self.hurtFrameCount = 0  # hurt 애니메이션 지속 프레임
     
     def update(self, delta_time: float):
         """적 이동 업데이트"""
         if not self.isDead:
-            self.x += self.direction * self.speed * delta_time
+            self.worldX += self.direction * self.speed * delta_time
             self.currentFrame = (self.currentFrame + 1) % 8
             
             # hurt 상태는 8프레임만 유지
@@ -129,12 +135,12 @@ class Enemy:
             self.hurtFrameCount = 0  # hurt 카운터 리셋
     
     def to_dict(self) -> dict:
-        """JSON 직렬화 (정규화된 좌표로 전송)"""
+        """JSON 직렬화 (월드 좌표로 전송)"""
         return {
             "id": self.id,
             "typeId": self.typeId,
-            "x": self.x / 1920,  # 0.0~1.0 정규화
-            "y": self.y / 1080,  # 0.0~1.0 정규화
+            "worldX": self.worldX,
+            "worldY": self.worldY,
             "currentHP": self.currentHP,
             "maxHP": self.maxHP,
             "animationState": self.animationState,
@@ -145,10 +151,11 @@ class Enemy:
 
 class Effect:
     """스킬 이펙트"""
-    def __init__(self, effect_id: str, effect_type: str, x: float, duration: float = 0.5):
+    def __init__(self, effect_id: str, effect_type: str, world_x: float, world_y: float, duration: float = 0.5):
         self.id = effect_id
         self.type = effect_type
-        self.x = x
+        self.worldX = world_x
+        self.worldY = world_y
         self.duration = duration
         self.createdAt = time.time()
     
@@ -159,7 +166,8 @@ class Effect:
         return {
             "id": self.id,
             "type": self.type,
-            "x": self.x
+            "worldX": self.worldX,
+            "worldY": self.worldY
         }
 
 
@@ -167,7 +175,7 @@ class Player:
     """플레이어 (스킬 시전)"""
     def __init__(self):
         self.skill_cooldown = 1.0  # 스킬 쿨다운 (초)
-        self.skill_range = 0.15  # 스킬 범위 (정규화, 0.0~1.0)
+        self.skill_range = 300  # 스킬 범위 (픽셀)
         self.skill_damage = 50
     
     def cast_skill(self, session_id: str, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
@@ -196,11 +204,23 @@ class Player:
         
         config = skill_config.get(gesture, {"type": "fireSlash", "damage": 50})
         
-        # x축만 사용 (0.0~1.0)
-        # 프론트엔드에서 화면 크기에 맞게 스케일링
+        # 시선 좌표 (0.0~1.0)를 월드 좌표로 변환
+        camera_x = gameState["cameraX"]
+        camera_y = gameState["cameraY"]
+        
+        # 시선 위치를 화면 좌표로 변환 후 월드 좌표로
+        screen_x = gaze_x * SCREEN_WIDTH
+        screen_y = gaze_y * SCREEN_HEIGHT
+        
+        world_x = camera_x - (SCREEN_WIDTH / 2) + screen_x
+        world_y = camera_y - (SCREEN_HEIGHT / 2) + screen_y
+        
+        print(f"[Skill] 시선: ({gaze_x:.2f}, {gaze_y:.2f}) → 화면: ({screen_x:.0f}, {screen_y:.0f}) → 월드: ({world_x:.0f}, {world_y:.0f}) | 카메라: ({camera_x:.0f}, {camera_y:.0f})")
+        
         return {
             "skill_type": config["type"],
-            "target_x": gaze_x,
+            "target_world_x": world_x,
+            "target_world_y": world_y,
             "damage": config["damage"],
             "range": self.skill_range
         }
@@ -212,10 +232,11 @@ player = Player()
 # ==================== 게임 로직 함수 ====================
 
 def spawn_enemy(session_id: str):
-    """웨이브에 따라 적 생성"""
+    """웨이브에 따라 적 생성 (카메라 기준)"""
     enemy_id = f"enemy_{uuid.uuid4().hex[:8]}"
     gameState = game_sessions[session_id]
     current_wave = gameState["waveNumber"]
+    camera_x = gameState["cameraX"]
     
     # 웨이브별 적군 선택 (낮은 티어도 계속 등장)
     if current_wave <= 5:
@@ -237,38 +258,39 @@ def spawn_enemy(session_id: str):
     
     type_id = np.random.choice(enemy_pool)
     
-    # 오른쪽 스폰
-    x = 1800 
-    # y축: 화면 하단 50~70% (1080 기준 540~756)
-    y = 648 + np.random.randint(0, 217)  # 540 + [0~216]
+    # 카메라 오른쪽 밖에서 스폰 (화면 밖 100픽셀)
+    world_x = camera_x + SCREEN_WIDTH / 2 + 100
     
-    enemy = Enemy(enemy_id, type_id, x, y)
+    # y축: 화면 하단 50~70% (월드 좌표)
+    world_y = 648 + np.random.randint(0, 217)
+    
+    enemy = Enemy(enemy_id, type_id, world_x, world_y)
     gameState["enemies"].append(enemy)
     
     config = ENEMY_CONFIG.get(type_id, {})
-    # print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at ({x}, {y})")
+    # print(f"[Game] 적 생성: {enemy_id} ({type_id}) HP:{config.get('hp', 100)} at world({world_x:.0f}, {world_y:.0f})")
 
 
 def check_collision(session_id: str, skill_data: Dict) -> List[Enemy]:
-    """스킬과 적 충돌 판정 (x축만 사용)"""
+    """스킬과 적 충돌 판정 (월드 좌표)"""
     hit_enemies = []
-    target_x = skill_data["target_x"]  # 0.0~1.0
-    skill_range = skill_data["range"]  # 0.0~1.0
+    target_world_x = skill_data["target_world_x"]
+    target_world_y = skill_data["target_world_y"]
+    skill_range = skill_data["range"]  # 픽셀 단위
     gameState = game_sessions[session_id]
     
-    print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
+    # print(f"[Collision] 스킬 타겟 world_x={target_world_x:.1f}, world_y={target_world_y:.1f}, 범위={skill_range}px")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
             continue
         
-        # 적 x좌표를 정규화 (1920 기준)
-        enemy_x_norm = enemy.x / 1920
+        # 월드 좌표에서 거리 계산
+        distance_x = abs(enemy.worldX - target_world_x)
+        distance_y = abs(enemy.worldY - target_world_y)
+        distance = (distance_x ** 2 + distance_y ** 2) ** 0.5
         
-        # x축 거리만 계산
-        distance = abs(enemy_x_norm - target_x)
-        
-        # print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f} (정규화={enemy_x_norm:.3f}), 거리={distance:.3f}, 타격={'O' if distance <= skill_range else 'X'}")
+        # print(f"[Collision] 적 {enemy.id}: world({enemy.worldX:.1f}, {enemy.worldY:.1f}), 거리={distance:.1f}px, 타격={'O' if distance <= skill_range else 'X'}")
         
         if distance <= skill_range:
             hit_enemies.append(enemy)
@@ -283,6 +305,7 @@ async def game_loop(websocket: WebSocket, session_id: str):
     세션별 게임 루프
     - 20fps (0.05초마다 실행)
     - 해당 세션의 AI 입력을 읽어서 게임 로직 처리
+    - 카메라 자동 스크롤
     - 해당 세션의 클라이언트에게만 브로드캐스트
     """
     print(f"[Game] 게임 루프 시작 (세션: {session_id[:8]}...)")
@@ -294,31 +317,49 @@ async def game_loop(websocket: WebSocket, session_id: str):
     spawn_interval = 3.0  # 3초마다 적 생성
     gameState["waveStartTime"] = time.time()  # 웨이브 시작 시간 기록
     
+    # 카메라 이동 속도 (초당 픽셀)
+    camera_speed = 50
+    
     try:
         while True:
             loop_start = time.time()
             delta_time = 0.05  # 20fps
             
-            # 0. 웨이브 진행 체크 (10초마다 웨이브 증가)
+            # 0. 카메라 자동 스크롤
+            gameState["cameraX"] += camera_speed * delta_time
+            
+            # 카메라 경계 체크 (맵 끝까지만)
+            max_camera_x = WORLD_WIDTH - SCREEN_WIDTH / 2
+            gameState["cameraX"] = min(gameState["cameraX"], max_camera_x)
+            
+            # 1. 웨이브 진행 체크 (10초마다 웨이브 증가)
             wave_elapsed = time.time() - gameState["waveStartTime"]
             if wave_elapsed >= 10.0:
                 gameState["waveNumber"] += 1
                 gameState["waveStartTime"] = time.time()
                 print(f"[Game] 웨이브 {gameState['waveNumber']} 시작! (세션: {session_id[:8]}...)")
             
-            # 1. 적 스포너
+            # 2. 적 스포너
             if time.time() - last_spawn_time > spawn_interval:
                 spawn_enemy(session_id)
                 last_spawn_time = time.time()
             
-            # 2. 적 업데이트 (이동)
+            # 3. 적 업데이트 (이동)
             for enemy in gameState["enemies"]:
                 enemy.update(delta_time)
             
-            # 3. 죽은 적 제거
-            gameState["enemies"] = [e for e in gameState["enemies"] if not e.isDead or time.time() - gameState["lastSkillTime"] < 1.0]
+            # 4. 카메라 뒤로 벗어난 적 제거
+            camera_left_edge = gameState["cameraX"] - SCREEN_WIDTH / 2 - 200
+            gameState["enemies"] = [
+                e for e in gameState["enemies"] 
+                if not e.isDead or time.time() - gameState["lastSkillTime"] < 1.0
+            ]
+            gameState["enemies"] = [
+                e for e in gameState["enemies"]
+                if e.worldX >= camera_left_edge
+            ]
             
-            # 4. AI 입력 확인 및 스킬 시전
+            # 5. AI 입력 확인 및 스킬 시전
             gesture = latestAIInput.get("gesture", "NONE")
             if gesture != "NONE" and gesture in ["A", "B", "C", "D", "L", "K", "R", "V", "W"]:
                 skill_data = player.cast_skill(
@@ -331,7 +372,12 @@ async def game_loop(websocket: WebSocket, session_id: str):
                 if skill_data:
                     # 이펙트 생성
                     effect_id = f"effect_{uuid.uuid4().hex[:8]}"
-                    effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
+                    effect = Effect(
+                        effect_id, 
+                        skill_data["skill_type"], 
+                        skill_data["target_world_x"],
+                        skill_data["target_world_y"]
+                    )
                     gameState["effects"].append(effect)
                     
                     # 충돌 판정
@@ -340,14 +386,18 @@ async def game_loop(websocket: WebSocket, session_id: str):
                         enemy.take_damage(skill_data["damage"])
                         gameState["playerScore"] += 10
             
-            # 5. 만료된 이펙트 제거
+            # 6. 만료된 이펙트 제거
             gameState["effects"] = [e for e in gameState["effects"] if not e.is_expired()]
             
-            # 6. Full State Sync 생성
+            # 7. Full State Sync 생성 (카메라 정보 포함)
             state_sync = {
                 "gameState": {
                     "enemies": [e.to_dict() for e in gameState["enemies"]],
                     "effects": [e.to_dict() for e in gameState["effects"]],
+                    "camera": {
+                        "worldX": gameState["cameraX"],
+                        "worldY": gameState["cameraY"]
+                    },
                     "gazePosition": {
                         "x": latestAIInput["gaze_x"],
                         "y": latestAIInput["gaze_y"]
@@ -358,20 +408,19 @@ async def game_loop(websocket: WebSocket, session_id: str):
                 }
             }
             
-            # 7. 해당 세션 클라이언트에게만 전송
+            # 8. 해당 세션 클라이언트에게만 전송
             try:
                 await websocket.send_json(state_sync)
             except:
                 print(f"[Game] 세션 {session_id[:8]}... 연결 끊김")
                 break
             
-            # 8. 20fps 유지
+            # 9. 20fps 유지
             elapsed = time.time() - loop_start
             sleep_time = max(0, delta_time - elapsed)
             await asyncio.sleep(sleep_time)
     except asyncio.CancelledError:
         print(f"[Game] 세션 {session_id[:8]}... 게임 루프 종료")
-        await asyncio.sleep(sleep_time)
 
 
 def calculate_gaze(face_key_points: dict) -> dict:
@@ -462,6 +511,8 @@ async def websocket_endpoint(websocket: WebSocket):
     game_sessions[session_id] = {
         "enemies": [],
         "effects": [],
+        "cameraX": SCREEN_WIDTH / 2,  # 초기 카메라 X 위치 (화면 중앙)
+        "cameraY": SCREEN_HEIGHT / 2,  # 초기 카메라 Y 위치 (화면 중앙)
         "playerGold": 0,
         "playerScore": 0,
         "waveNumber": 1,
