@@ -103,12 +103,12 @@ class Enemy:
             self.animationState = "death"
     
     def to_dict(self) -> dict:
-        """JSON 직렬화"""
+        """JSON 직렬화 (정규화된 좌표로 전송)"""
         return {
             "id": self.id,
             "typeId": self.typeId,
-            "x": self.x,
-            "y": self.y,
+            "x": self.x / 1920,  # 0.0~1.0 정규화
+            "y": self.y / 1080,  # 0.0~1.0 정규화
             "currentHP": self.currentHP,
             "maxHP": self.maxHP,
             "animationState": self.animationState,
@@ -119,11 +119,10 @@ class Enemy:
 
 class Effect:
     """스킬 이펙트"""
-    def __init__(self, effect_id: str, effect_type: str, x: float, y: float, duration: float = 0.5):
+    def __init__(self, effect_id: str, effect_type: str, x: float, duration: float = 0.5):
         self.id = effect_id
         self.type = effect_type
         self.x = x
-        self.y = y
         self.duration = duration
         self.createdAt = time.time()
     
@@ -134,8 +133,7 @@ class Effect:
         return {
             "id": self.id,
             "type": self.type,
-            "x": self.x,
-            "y": self.y
+            "x": self.x
         }
 
 
@@ -143,7 +141,7 @@ class Player:
     """플레이어 (스킬 시전)"""
     def __init__(self):
         self.skill_cooldown = 1.0  # 스킬 쿨다운 (초)
-        self.skill_range = 200  # 스킬 범위 (pixels)
+        self.skill_range = 0.15  # 스킬 범위 (정규화, 0.0~1.0)
         self.skill_damage = 50
     
     def cast_skill(self, gesture: str, gaze_x: float, gaze_y: float) -> Dict:
@@ -167,15 +165,11 @@ class Player:
         }
         skill_type = skill_types.get(gesture, "fireSlash")
         
-        # 시선 위치를 화면 좌표로 변환 (예: 1920x1080)
-        # 0.0~1.0 범위를 0~1920, 0~1080으로 변환
-        target_x = gaze_x * 1920
-        target_y = gaze_y * 1080
-        
+        # x축만 사용 (0.0~1.0)
+        # 프론트엔드에서 화면 크기에 맞게 스케일링
         return {
             "skill_type": skill_type,
-            "target_x": target_x,
-            "target_y": target_y,
+            "target_x": gaze_x,
             "damage": self.skill_damage,
             "range": self.skill_range
         }
@@ -192,9 +186,10 @@ def spawn_enemy():
     enemy_types = ["skeleton", "orc", "slime", "skeletonArcher"]
     type_id = enemy_types[len(gameState["enemies"]) % len(enemy_types)]
     
-    # 좌우 랜덤 스폰
-    x = 1800 if np.random.random() > 0.5 else 100
-    y = 400 + np.random.randint(-100, 100)
+    # 오른쪽 스폰
+    x = 1800 
+    # y축: 화면 하단 50~70% (1080 기준 540~756)
+    y = 648 + np.random.randint(0, 217)  # 540 + [0~216]
     
     enemy = Enemy(enemy_id, type_id, x, y)
     gameState["enemies"].append(enemy)
@@ -202,18 +197,24 @@ def spawn_enemy():
 
 
 def check_collision(skill_data: Dict) -> List[Enemy]:
-    """스킬과 적 충돌 판정"""
+    """스킬과 적 충돌 판정 (x축만 사용)"""
     hit_enemies = []
-    target_x = skill_data["target_x"]
-    target_y = skill_data["target_y"]
-    skill_range = skill_data["range"]
+    target_x = skill_data["target_x"]  # 0.0~1.0
+    skill_range = skill_data["range"]  # 0.0~1.0
+    
+    print(f"[Collision] 스킬 타겟 x={target_x:.3f}, 범위={skill_range:.3f}")
     
     for enemy in gameState["enemies"]:
         if enemy.isDead:
             continue
         
-        # 거리 계산
-        distance = np.sqrt((enemy.x - target_x)**2 + (enemy.y - target_y)**2)
+        # 적 x좌표를 정규화 (1920 기준)
+        enemy_x_norm = enemy.x / 1920
+        
+        # x축 거리만 계산
+        distance = abs(enemy_x_norm - target_x)
+        
+        print(f"[Collision] 적 {enemy.id}: x={enemy.x:.1f} (정규화={enemy_x_norm:.3f}), 거리={distance:.3f}, 타격={'O' if distance <= skill_range else 'X'}")
         
         if distance <= skill_range:
             hit_enemies.append(enemy)
@@ -263,7 +264,7 @@ async def game_loop():
             if skill_data:
                 # 이펙트 생성
                 effect_id = f"effect_{uuid.uuid4().hex[:8]}"
-                effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"], skill_data["target_y"])
+                effect = Effect(effect_id, skill_data["skill_type"], skill_data["target_x"])
                 gameState["effects"].append(effect)
                 
                 # 충돌 판정
