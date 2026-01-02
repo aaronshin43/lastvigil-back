@@ -290,8 +290,9 @@ async def game_loop(websocket: WebSocket, session_id: str):
                 gameState["waveNumber"] += 1
                 print(f"[Game] Wave {gameState['waveNumber']} started! (session: {session_id[:8]}..., score: {current_score})")
             
-            # 1. Enemy spawner
-            if time.time() - last_spawn_time > spawn_interval:
+            # 1. Enemy spawner (only spawn if less than 1 enemy alive)
+            alive_enemies = [e for e in gameState["enemies"] if not e.isDead]
+            if time.time() - last_spawn_time > spawn_interval and len(alive_enemies) < 1:
                 spawn_enemy(session_id)
                 last_spawn_time = time.time()
             
